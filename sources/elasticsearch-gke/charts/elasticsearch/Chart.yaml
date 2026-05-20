@@ -1,0 +1,5 @@
+apiVersion: v2
+name: elasticsearch
+description: Elasticsearch cluster managed by ECK
+version: 0.1.0
+type: application

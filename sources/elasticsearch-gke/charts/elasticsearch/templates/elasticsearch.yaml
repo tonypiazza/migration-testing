@@ -1,0 +1,44 @@
+apiVersion: elasticsearch.k8s.elastic.co/v1
+kind: Elasticsearch
+metadata:
+  name: {{ .Values.clusterName }}
+spec:
+  version: {{ .Values.version }}
+  http:
+    service:
+      spec:
+        type: {{ .Values.http.type }}
+        loadBalancerSourceRanges:
+        {{- range .Values.http.allowedCIDRs }}
+          - {{ . | quote }}
+        {{- end }}
+  nodeSets:
+  {{- range .Values.nodeSets }}
+  - name: {{ .name }}
+    count: {{ .count }}
+    config:
+      node.store.allow_mmap: false
+    podTemplate:
+      spec:
+        containers:
+        - name: elasticsearch
+          env:
+          - name: ES_JAVA_OPTS
+            value: {{ .javaOpts | quote }}
+          resources:
+            requests:
+              memory: {{ .resources.requests.memory }}
+              cpu: {{ .resources.requests.cpu | quote }}
+            limits:
+              memory: {{ .resources.limits.memory }}
+              cpu: {{ .resources.limits.cpu | quote }}
+    volumeClaimTemplates:
+    - metadata:
+        name: elasticsearch-data
+      spec:
+        accessModes:
+        - ReadWriteOnce
+        resources:
+          requests:
+            storage: {{ .storage }}
+  {{- end }}

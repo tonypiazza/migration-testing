@@ -1,0 +1,86 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.clusterName }}-admin-credentials
+type: Opaque
+stringData:
+  username: admin
+  password: {{ .Values.adminPassword }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.clusterName }}-securityconfig
+type: Opaque
+stringData:
+  internal_users.yml: |
+    _meta:
+      type: "internalusers"
+      config_version: 2
+    admin:
+      hash: {{ .Values.adminPasswordHash | quote }}
+      reserved: true
+      backend_roles:
+        - "admin"
+      description: "Admin user"
+---
+apiVersion: opensearch.opster.io/v1
+kind: OpenSearchCluster
+metadata:
+  name: {{ .Values.clusterName }}
+spec:
+  general:
+    version: {{ .Values.version }}
+    httpPort: 9200
+    serviceName: {{ .Values.clusterName }}
+    setVMMaxMapCount: true
+  security:
+    config:
+      adminCredentialsSecret:
+        name: {{ .Values.clusterName }}-admin-credentials
+      securityConfigSecret:
+        name: {{ .Values.clusterName }}-securityconfig
+    tls:
+      transport:
+        generate: true
+      http:
+        generate: true
+  dashboards:
+    enable: false
+    replicas: 0
+    version: {{ .Values.version }}
+  nodePools:
+  {{- range .Values.nodePools }}
+  - component: {{ .component }}
+    replicas: {{ .replicas }}
+    roles:
+    {{- range .roles }}
+    - {{ . | quote }}
+    {{- end }}
+    jvm: {{ .jvm }}
+    resources:
+      requests:
+        memory: {{ .resources.requests.memory }}
+        cpu: {{ .resources.requests.cpu | quote }}
+      limits:
+        memory: {{ .resources.limits.memory }}
+        cpu: {{ .resources.limits.cpu | quote }}
+    diskSize: {{ .diskSize | quote }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.clusterName }}-external
+spec:
+  type: {{ .Values.http.type }}
+  selector:
+    opster.io/opensearch-cluster: {{ .Values.clusterName }}
+  ports:
+    - name: https
+      port: 9200
+      targetPort: 9200
+  loadBalancerSourceRanges:
+  {{- range .Values.http.allowedCIDRs }}
+  - {{ . | quote }}
+  {{- end }}

@@ -1,0 +1,26 @@
+clusterName: os-target
+version: "2.19.0"
+adminPassword: "changeme"
+adminPasswordHash: "$2a$10$placeholder"
+
+nodePools:
+  - component: nodes
+    replicas: 3
+    roles:
+      - cluster_manager
+      - data
+      - ingest
+    jvm: "-Xms4g -Xmx4g"
+    resources:
+      requests:
+        memory: 8Gi
+        cpu: 2
+      limits:
+        memory: 8Gi
+        cpu: 4
+    diskSize: 80Gi
+
+http:
+  type: LoadBalancer
+  allowedCIDRs:
+    - "0.0.0.0/0"

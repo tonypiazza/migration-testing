@@ -1,0 +1,20 @@
+clusterName: es-source
+version: "8.17.0"
+
+nodeSets:
+  - name: default
+    count: 3
+    javaOpts: "-Xms4g -Xmx4g"
+    resources:
+      requests:
+        memory: 8Gi
+        cpu: 2
+      limits:
+        memory: 8Gi
+        cpu: 4
+    storage: 80Gi
+
+http:
+  type: LoadBalancer
+  allowedCIDRs:
+    - "0.0.0.0/0"

@@ -9,7 +9,12 @@ output "opensearch_password" {
   sensitive   = true
 }
 
-output "opensearch_endpoint" {
-  description = "OpenSearch endpoint IP (HTTPS with self-signed cert)"
-  value       = "kubectl get svc os-target-external -o jsonpath='{.status.loadBalancer.ingress[0].ip}'"
+output "env_vars" {
+  description = "Run: eval \"$(terraform -chdir=targets/opensearch-gke/terraform output -raw env_vars)\""
+  sensitive   = true
+  value       = <<-EOT
+    export TARGET_USER=admin
+    export TARGET_PASSWORD=${random_password.opensearch_admin.result}
+    export TARGET_HOST=$(kubectl get svc os-target-external -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+  EOT
 }

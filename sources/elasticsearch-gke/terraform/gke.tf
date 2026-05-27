@@ -43,5 +43,16 @@ resource "null_resource" "kubeconfig" {
     command = "gcloud container clusters get-credentials ${local.cluster_name} --${var.zone != null ? "zone ${var.zone}" : "region ${var.region}"} --project ${var.project_id}"
   }
 
+  provisioner "local-exec" {
+    when    = destroy
+    command = "kubectl config delete-context gke_${self.triggers.project}_${self.triggers.location}_${self.triggers.cluster} || true"
+  }
+
+  triggers = {
+    cluster  = local.cluster_name
+    project  = var.project_id
+    location = var.zone != null ? var.zone : var.region
+  }
+
   depends_on = [google_container_node_pool.main]
 }

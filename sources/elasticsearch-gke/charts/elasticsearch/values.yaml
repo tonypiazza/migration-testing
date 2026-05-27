@@ -18,3 +18,8 @@ http:
   type: LoadBalancer
   allowedCIDRs:
     - "0.0.0.0/0"
+  psc:
+    enabled: false
+    subnet: ""
+    natSubnet: ""
+    consumerProjectIds: []

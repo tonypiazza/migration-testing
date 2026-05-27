@@ -54,5 +54,25 @@ resource "helm_release" "elasticsearch" {
     value = "{${join(",", var.allowed_cidrs)}}"
   }
 
+  set {
+    name  = "http.psc.enabled"
+    value = tostring(var.enable_psc)
+  }
+
+  set {
+    name  = "http.psc.subnet"
+    value = var.enable_psc ? google_compute_subnetwork.main.name : ""
+  }
+
+  set {
+    name  = "http.psc.natSubnet"
+    value = var.enable_psc ? google_compute_subnetwork.psc[0].id : ""
+  }
+
+  set {
+    name  = "http.psc.consumerProjectIds"
+    value = "{${join(",", var.psc_consumer_project_ids)}}"
+  }
+
   depends_on = [helm_release.eck_operator]
 }

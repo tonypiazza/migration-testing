@@ -21,3 +21,14 @@ resource "google_compute_subnetwork" "main" {
     ip_cidr_range = "10.8.0.0/20"
   }
 }
+
+resource "google_compute_subnetwork" "psc" {
+  count = var.enable_psc ? 1 : 0
+
+  name          = "${local.cluster_name}-psc-nat"
+  project       = var.project_id
+  region        = var.region
+  network       = google_compute_network.main.id
+  ip_cidr_range = "10.100.0.0/24"
+  purpose       = "PRIVATE_SERVICE_CONNECT"
+}

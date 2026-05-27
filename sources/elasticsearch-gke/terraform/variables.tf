@@ -56,3 +56,15 @@ variable "allowed_cidrs" {
   type        = list(string)
   default     = ["0.0.0.0/0"]
 }
+
+variable "enable_psc" {
+  description = "Expose Elasticsearch via Private Service Connect instead of external LoadBalancer"
+  type        = bool
+  default     = false
+}
+
+variable "psc_consumer_project_ids" {
+  description = "GCP project IDs allowed to connect via PSC (required when enable_psc = true)"
+  type        = list(string)
+  default     = []
+}

@@ -6,11 +6,19 @@ spec:
   version: {{ .Values.version }}
   http:
     service:
+      metadata:
+        annotations:
+          {{- if .Values.http.psc.enabled }}
+          networking.gke.io/load-balancer-type: "Internal"
+          networking.gke.io/internal-load-balancer-subnet: {{ .Values.http.psc.subnet | quote }}
+          {{- end }}
       spec:
         type: {{ .Values.http.type }}
+        {{- if not .Values.http.psc.enabled }}
         loadBalancerSourceRanges:
         {{- range .Values.http.allowedCIDRs }}
           - {{ . | quote }}
+        {{- end }}
         {{- end }}
   nodeSets:
   {{- range .Values.nodeSets }}
@@ -42,3 +50,23 @@ spec:
           requests:
             storage: {{ .storage }}
   {{- end }}
+{{- if .Values.http.psc.enabled }}
+---
+apiVersion: networking.gke.io/v1
+kind: ServiceAttachment
+metadata:
+  name: {{ .Values.clusterName }}-psc
+spec:
+  connectionPreference: ACCEPT_MANUAL
+  natSubnets:
+    - {{ .Values.http.psc.natSubnet }}
+  proxyProtocol: false
+  resourceRef:
+    kind: Service
+    name: {{ .Values.clusterName }}-es-http
+  consumerAllowList:
+    {{- range .Values.http.psc.consumerProjectIds }}
+    - project: {{ . }}
+      connectionLimit: 10
+    {{- end }}
+{{- end }}

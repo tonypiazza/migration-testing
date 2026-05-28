@@ -1,5 +1,5 @@
 clusterName: os-target
-version: "2.19.0"
+version: "3.6.0"
 adminPassword: "changeme"
 adminPasswordHash: "$2a$10$placeholder"
 
@@ -18,7 +18,7 @@ nodePools:
       limits:
         memory: 8Gi
         cpu: 4
-    diskSize: 80Gi
+    diskSize: 50Gi
 
 http:
   type: LoadBalancer

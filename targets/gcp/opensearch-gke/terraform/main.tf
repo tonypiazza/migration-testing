@@ -15,17 +15,34 @@ provider "google" {
 }
 
 provider "kubernetes" {
-  host                   = "https://${google_container_cluster.main.endpoint}"
+  host                   = "https://${module.cluster.endpoint}"
   token                  = data.google_client_config.default.access_token
-  cluster_ca_certificate = base64decode(google_container_cluster.main.master_auth[0].cluster_ca_certificate)
+  cluster_ca_certificate = base64decode(module.cluster.ca_certificate)
 }
 
 provider "helm" {
   kubernetes {
-    host                   = "https://${google_container_cluster.main.endpoint}"
+    host                   = "https://${module.cluster.endpoint}"
     token                  = data.google_client_config.default.access_token
-    cluster_ca_certificate = base64decode(google_container_cluster.main.master_auth[0].cluster_ca_certificate)
+    cluster_ca_certificate = base64decode(module.cluster.ca_certificate)
   }
+}
+
+module "cluster" {
+  source = "../../../../modules/gke-cluster"
+
+  project_id   = var.project_id
+  region       = var.region
+  zone         = var.zone
+  cluster_name = local.cluster_name
+  machine_type = var.machine_type
+  node_count   = var.node_count
+  disk_size_gb = var.disk_size_gb
+}
+
+resource "random_password" "opensearch_admin" {
+  length  = 24
+  special = false
 }
 
 resource "helm_release" "opensearch_operator" {
@@ -41,12 +58,7 @@ resource "helm_release" "opensearch_operator" {
     value = "registry.k8s.io/kubebuilder/kube-rbac-proxy"
   }
 
-  depends_on = [google_container_node_pool.main]
-}
-
-resource "random_password" "opensearch_admin" {
-  length  = 24
-  special = false
+  depends_on = [module.cluster]
 }
 
 resource "time_sleep" "wait_for_crds" {

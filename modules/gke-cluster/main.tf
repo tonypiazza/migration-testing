@@ -1,5 +1,29 @@
+resource "google_compute_network" "main" {
+  name                    = "${var.cluster_name}-vpc"
+  project                 = var.project_id
+  auto_create_subnetworks = false
+}
+
+resource "google_compute_subnetwork" "main" {
+  name          = "${var.cluster_name}-subnet"
+  project       = var.project_id
+  region        = var.region
+  network       = google_compute_network.main.id
+  ip_cidr_range = "10.0.0.0/20"
+
+  secondary_ip_range {
+    range_name    = "pods"
+    ip_cidr_range = "10.4.0.0/14"
+  }
+
+  secondary_ip_range {
+    range_name    = "services"
+    ip_cidr_range = "10.8.0.0/20"
+  }
+}
+
 resource "google_container_cluster" "main" {
-  name     = local.cluster_name
+  name     = var.cluster_name
   project  = var.project_id
   location = var.zone != null ? var.zone : var.region
 
@@ -18,7 +42,7 @@ resource "google_container_cluster" "main" {
 }
 
 resource "google_container_node_pool" "main" {
-  name     = "${local.cluster_name}-pool"
+  name     = "${var.cluster_name}-pool"
   project  = var.project_id
   location = google_container_cluster.main.location
   cluster  = google_container_cluster.main.name
@@ -36,23 +60,4 @@ resource "google_container_node_pool" "main" {
       "https://www.googleapis.com/auth/monitoring",
     ]
   }
-}
-
-resource "null_resource" "kubeconfig" {
-  provisioner "local-exec" {
-    command = "gcloud container clusters get-credentials ${local.cluster_name} --${var.zone != null ? "zone ${var.zone}" : "region ${var.region}"} --project ${var.project_id}"
-  }
-
-  provisioner "local-exec" {
-    when    = destroy
-    command = "kubectl config delete-context gke_${self.triggers.project}_${self.triggers.location}_${self.triggers.cluster} || true"
-  }
-
-  triggers = {
-    cluster  = local.cluster_name
-    project  = var.project_id
-    location = var.zone != null ? var.zone : var.region
-  }
-
-  depends_on = [google_container_node_pool.main]
 }

@@ -12,7 +12,7 @@ nodeSets:
       limits:
         memory: 8Gi
         cpu: 4
-    storage: 80Gi
+    storage: 50Gi
 
 http:
   type: LoadBalancer

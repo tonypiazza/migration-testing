@@ -14,17 +14,29 @@ provider "google" {
 }
 
 provider "kubernetes" {
-  host                   = "https://${google_container_cluster.main.endpoint}"
+  host                   = "https://${module.cluster.endpoint}"
   token                  = data.google_client_config.default.access_token
-  cluster_ca_certificate = base64decode(google_container_cluster.main.master_auth[0].cluster_ca_certificate)
+  cluster_ca_certificate = base64decode(module.cluster.ca_certificate)
 }
 
 provider "helm" {
   kubernetes {
-    host                   = "https://${google_container_cluster.main.endpoint}"
+    host                   = "https://${module.cluster.endpoint}"
     token                  = data.google_client_config.default.access_token
-    cluster_ca_certificate = base64decode(google_container_cluster.main.master_auth[0].cluster_ca_certificate)
+    cluster_ca_certificate = base64decode(module.cluster.ca_certificate)
   }
+}
+
+module "cluster" {
+  source = "../../../../modules/gke-cluster"
+
+  project_id   = var.project_id
+  region       = var.region
+  zone         = var.zone
+  cluster_name = local.cluster_name
+  machine_type = var.machine_type
+  node_count   = var.node_count
+  disk_size_gb = var.disk_size_gb
 }
 
 resource "helm_release" "eck_operator" {
@@ -35,7 +47,7 @@ resource "helm_release" "eck_operator" {
   namespace        = "elastic-system"
   create_namespace = true
 
-  depends_on = [google_container_node_pool.main]
+  depends_on = [module.cluster]
 }
 
 resource "helm_release" "elasticsearch" {
@@ -61,7 +73,7 @@ resource "helm_release" "elasticsearch" {
 
   set {
     name  = "http.psc.subnet"
-    value = var.enable_psc ? google_compute_subnetwork.main.name : ""
+    value = var.enable_psc ? module.cluster.subnet_name : ""
   }
 
   set {
@@ -75,4 +87,15 @@ resource "helm_release" "elasticsearch" {
   }
 
   depends_on = [helm_release.eck_operator]
+}
+
+resource "google_compute_subnetwork" "psc" {
+  count = var.enable_psc ? 1 : 0
+
+  name          = "${local.cluster_name}-psc-nat"
+  project       = var.project_id
+  region        = var.region
+  network       = module.cluster.network_id
+  ip_cidr_range = "10.100.0.0/24"
+  purpose       = "PRIVATE_SERVICE_CONNECT"
 }

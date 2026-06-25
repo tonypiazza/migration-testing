@@ -1,3 +1,8 @@
+output "software" {
+  description = "Software name and version"
+  value       = "Elasticsearch v${var.elasticsearch_version}"
+}
+
 output "project_id" {
   description = "GCP project ID"
   value       = var.project_id
@@ -13,22 +18,28 @@ output "location" {
   value       = module.cluster.location
 }
 
-output "get_credentials_command" {
-  description = "Command to point kubectl at this cluster"
-  value       = "gcloud container clusters get-credentials ${local.cluster_name} --location ${module.cluster.location} --project ${var.project_id}"
+output "cluster_ip" {
+  description = "Elasticsearch load balancer IP"
+  value       = data.kubernetes_service.es_http.status[0].load_balancer[0].ingress[0].ip
 }
 
-output "connection_info" {
-  description = "Source cluster connection details"
+output "cluster_password" {
+  description = "Elasticsearch elastic user password"
   sensitive   = true
-  value       = <<-EOT
-    export SOURCE_USER=elastic
-    export SOURCE_PASSWORD=$(kubectl get secret es-source-es-elastic-user -o jsonpath='{.data.elastic}' | base64 -d)
-    export SOURCE_HOST=$(kubectl get svc es-source-es-http -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-  EOT
+  value       = data.kubernetes_secret.es_password.data["elastic"]
 }
 
-output "psc_service_attachment" {
-  description = "Retrieve PSC service attachment URI"
-  value       = var.enable_psc ? "kubectl get serviceattachment es-source-psc -o jsonpath='{.status.serviceAttachmentURI}'" : null
+output "vpc_network_self_link" {
+  description = "VPC network self-link"
+  value       = module.cluster.network_self_link
+}
+
+output "vpc_subnet_self_link" {
+  description = "Subnet self-link"
+  value       = module.cluster.subnet_self_link
+}
+
+output "psc_enabled" {
+  description = "Whether PSC producer is enabled"
+  value       = var.enable_psc
 }

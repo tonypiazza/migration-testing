@@ -46,19 +46,22 @@ if [[ -n "${GCP_PROJECT_ID:-}" ]]; then
 fi
 
 usage() {
-  echo "Usage: $0 <action> <config-path>"
+  echo "Usage: $0 <action> <config-path> [--private-networking]"
   echo ""
   echo "Actions:"
-  echo "  up      Create the cluster and print connection details"
+  echo "  up      Create the cluster"
   echo "  down    Destroy the cluster"
   echo "  info    Print connection details for an existing cluster"
   echo "  specs   Print effective cluster specs (no running cluster required)"
+  echo ""
+  echo "Options:"
+  echo "  --private-networking  Enable private networking (PSC on GCP, equivalent on other platforms)"
   echo ""
   echo "Config path: <sources|targets>/<platform>/<config>"
   echo ""
   echo "Examples:"
   echo "  $0 up sources/gcp/elasticsearch-gke"
-  echo "  $0 up targets/gcp/opensearch-gke"
+  echo "  $0 up targets/gcp/opensearch-gke --private-networking"
   echo "  $0 info targets/gcp/opensearch-gke"
   echo "  $0 down sources/gcp/elasticsearch-gke"
   echo ""
@@ -81,6 +84,18 @@ usage() {
 
 ACTION="$1"
 CONFIG_PATH="$2"
+
+PRIVATE_NETWORKING=false
+for arg in "${@:3}"; do
+  case "$arg" in
+    --private-networking) PRIVATE_NETWORKING=true ;;
+    *) echo "Error: unknown option: $arg"; usage ;;
+  esac
+done
+
+if [[ "$PRIVATE_NETWORKING" == "true" ]]; then
+  TF_VARS+=(-var "enable_psc=true")
+fi
 CONFIG_DIR="${SCRIPT_DIR}/${CONFIG_PATH}"
 TF_DIR="${CONFIG_DIR}/terraform"
 CLUSTER_ROLE="$(echo "$CONFIG_PATH" | cut -d/ -f1)"
@@ -229,9 +244,31 @@ print_info() {
   echo "============================================"
 }
 
+validate_private_networking() {
+  echo "Validating private networking configuration..."
+  if ! $TF_CMD -chdir="$TF_DIR" validate -no-color ${TF_VARS[@]+"${TF_VARS[@]}"} >/dev/null; then
+    echo "Error: Terraform validation failed. Check your terraform.tfvars."
+    exit 1
+  fi
+
+  local consumer_ids
+  consumer_ids="$(get_tfvars_value "${TF_DIR}/terraform.tfvars" "psc_consumer_project_ids" 2>/dev/null || true)"
+  if [[ -z "$consumer_ids" ]]; then
+    echo "Warning: psc_consumer_project_ids is not set in terraform.tfvars."
+    echo "         The service attachment will be created with no authorized consumers."
+    echo "         You will need to authorize the migration project separately."
+    echo ""
+  fi
+}
+
 do_up() {
   echo "Initializing Terraform..."
   $TF_CMD -chdir="$TF_DIR" init
+
+  if [[ "$PRIVATE_NETWORKING" == "true" ]]; then
+    echo ""
+    validate_private_networking
+  fi
 
   echo ""
   echo "Creating cluster..."

@@ -32,3 +32,13 @@ output "subnet_name" {
   description = "Subnet name"
   value       = google_compute_subnetwork.main.name
 }
+
+output "subnet_self_link" {
+  description = "Subnet self-link (needed for PSC NAT subnet and peering)"
+  value       = google_compute_subnetwork.main.self_link
+}
+
+output "network_self_link" {
+  description = "VPC network self-link (needed for VPC peering)"
+  value       = google_compute_network.main.self_link
+}

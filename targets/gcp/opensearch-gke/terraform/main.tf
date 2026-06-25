@@ -40,6 +40,17 @@ module "cluster" {
   disk_size_gb = var.disk_size_gb
 }
 
+resource "google_compute_subnetwork" "psc" {
+  count = var.enable_psc ? 1 : 0
+
+  name          = "${local.cluster_name}-psc-nat"
+  project       = var.project_id
+  region        = var.region
+  network       = module.cluster.network_id
+  ip_cidr_range = "10.100.0.0/24"
+  purpose       = "PRIVATE_SERVICE_CONNECT"
+}
+
 resource "random_password" "opensearch_admin" {
   length  = 24
   special = false
@@ -93,9 +104,43 @@ resource "helm_release" "opensearch" {
     value = "{${join(",", var.allowed_cidrs)}}"
   }
 
+  set {
+    name  = "http.psc.enabled"
+    value = tostring(var.enable_psc)
+  }
+
+  set {
+    name  = "http.psc.subnet"
+    value = var.enable_psc ? module.cluster.subnet_self_link : ""
+  }
+
+  set {
+    name  = "http.psc.natSubnet"
+    value = var.enable_psc ? google_compute_subnetwork.psc[0].self_link : ""
+  }
+
+  set {
+    name  = "http.psc.consumerProjectIds"
+    value = "{${join(",", var.psc_consumer_project_ids)}}"
+  }
+
   lifecycle {
     ignore_changes = [set]
   }
 
   depends_on = [time_sleep.wait_for_crds]
+}
+
+resource "time_sleep" "wait_for_opensearch" {
+  depends_on      = [helm_release.opensearch]
+  create_duration = "120s"
+}
+
+data "kubernetes_service" "os_http" {
+  metadata {
+    name      = "os-target-external"
+    namespace = "default"
+  }
+
+  depends_on = [time_sleep.wait_for_opensearch]
 }

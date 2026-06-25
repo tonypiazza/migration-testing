@@ -5,7 +5,7 @@ adminPasswordHash: "$2a$10$placeholder"
 
 nodePools:
   - component: nodes
-    replicas: 3
+    replicas: 5
     roles:
       - cluster_manager
       - data
@@ -24,3 +24,8 @@ http:
   type: LoadBalancer
   allowedCIDRs:
     - "0.0.0.0/0"
+  psc:
+    enabled: false
+    subnet: ""
+    natSubnet: ""
+    consumerProjectIds: []

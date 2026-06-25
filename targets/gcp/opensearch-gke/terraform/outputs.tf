@@ -1,3 +1,8 @@
+output "software" {
+  description = "Software name and version"
+  value       = "OpenSearch v${var.opensearch_version}"
+}
+
 output "project_id" {
   description = "GCP project ID"
   value       = var.project_id
@@ -13,17 +18,28 @@ output "location" {
   value       = module.cluster.location
 }
 
-output "get_credentials_command" {
-  description = "Command to point kubectl at this cluster"
-  value       = "gcloud container clusters get-credentials ${local.cluster_name} --location ${module.cluster.location} --project ${var.project_id}"
+output "cluster_ip" {
+  description = "OpenSearch load balancer IP"
+  value       = data.kubernetes_service.os_http.status[0].load_balancer[0].ingress[0].ip
 }
 
-output "connection_info" {
-  description = "Target cluster connection details"
+output "cluster_password" {
+  description = "OpenSearch admin password"
   sensitive   = true
-  value       = <<-EOT
-    export TARGET_USER=admin
-    export TARGET_PASSWORD=${random_password.opensearch_admin.result}
-    export TARGET_HOST=$(kubectl get svc os-target-external -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-  EOT
+  value       = random_password.opensearch_admin.result
+}
+
+output "vpc_network_self_link" {
+  description = "VPC network self-link"
+  value       = module.cluster.network_self_link
+}
+
+output "vpc_subnet_self_link" {
+  description = "Subnet self-link"
+  value       = module.cluster.subnet_self_link
+}
+
+output "psc_enabled" {
+  description = "Whether PSC producer is enabled"
+  value       = var.enable_psc
 }

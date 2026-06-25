@@ -35,15 +35,15 @@ cp sources/gcp/elasticsearch-gke/terraform/terraform.tfvars.example \
 
 ## Commands
 
+Run `./cluster.sh` with no arguments to see all available paths.
+
 | Command | Description |
 |---------|-------------|
-| `./cluster.sh up <config>` | Create cluster and print connection details |
-| `./cluster.sh up <config> --private-networking` | Create cluster with private networking enabled |
-| `./cluster.sh down <config>` | Destroy cluster and clean up kubectl context |
-| `./cluster.sh info <config>` | Re-print connection details for a running cluster |
-| `./cluster.sh specs <config>` | Print effective cluster specs without a running cluster |
-
-Run `./cluster.sh` with no arguments to see available configs.
+| `./cluster.sh up <path>` | Create cluster |
+| `./cluster.sh up <path> --private-networking` | Create cluster with private networking enabled |
+| `./cluster.sh down <path>` | Destroy cluster |
+| `./cluster.sh info <path>` | Re-print connection details for a running cluster |
+| `./cluster.sh specs <path>` | Print effective cluster specs without a running cluster |
 
 ## Private Networking (GCP)
 

@@ -24,7 +24,7 @@ cp sources/gcp/elasticsearch-gke/terraform/terraform.tfvars.example \
 ./cluster.sh up targets/gcp/opensearch-gke
 ```
 
-3. Use the printed IP, User, and Password to configure the migration assistant.
+3. Use the printed connection details to configure the migration assistant.
 
 4. Tear down when done:
 
@@ -40,6 +40,7 @@ cp sources/gcp/elasticsearch-gke/terraform/terraform.tfvars.example \
 | `./cluster.sh up <config>` | Create cluster and print connection details |
 | `./cluster.sh down <config>` | Destroy cluster and clean up kubectl context |
 | `./cluster.sh info <config>` | Re-print connection details for a running cluster |
+| `./cluster.sh specs <config>` | Print effective cluster specs without a running cluster |
 
 Run `./cluster.sh` with no arguments to see available configs.
 

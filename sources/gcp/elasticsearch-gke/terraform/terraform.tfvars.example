@@ -11,6 +11,21 @@ project_id = "my-gcp-project"
 # eck_version              = "2.14.0"
 # allowed_cidrs            = ["203.0.113.0/24"]
 
-# Private Service Connect:
+# Private Service Connect (PSC producer):
+# Exposes Elasticsearch via an internal LB + GKE ServiceAttachment instead of an external LB.
+# After apply, use the PSC URI printed by cluster.sh as the migration console's
+# source_connectivity.service_attachment input.
 # enable_psc               = true
-# psc_consumer_project_ids = ["consumer-project-123"]
+# psc_consumer_project_ids = ["migration-project-123"]
+
+# VPC Peering:
+# Peers this VPC with the migration cluster's VPC so Elasticsearch is reachable over internal IPs.
+# After apply, the migration cluster must create the reciprocal peering targeting the
+# vpc_network_self_link output. peer_cidrs must not overlap with 10.0.0.0/20 (nodes),
+# 10.4.0.0/14 (pods), or 10.8.0.0/20 (services).
+# vpc_peering = {
+#   mode               = "enabled"
+#   peer_project       = "migration-project-123"
+#   peer_vpc_self_link = "https://www.googleapis.com/compute/v1/projects/migration-project-123/global/networks/migration-vpc"
+#   peer_cidrs         = ["10.200.0.0/20"]
+# }

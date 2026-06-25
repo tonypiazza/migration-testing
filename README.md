@@ -38,6 +38,7 @@ cp sources/gcp/elasticsearch-gke/terraform/terraform.tfvars.example \
 | Command | Description |
 |---------|-------------|
 | `./cluster.sh up <config>` | Create cluster and print connection details |
+| `./cluster.sh up <config> --private-networking` | Create cluster with private networking enabled |
 | `./cluster.sh down <config>` | Destroy cluster and clean up kubectl context |
 | `./cluster.sh info <config>` | Re-print connection details for a running cluster |
 | `./cluster.sh specs <config>` | Print effective cluster specs without a running cluster |
@@ -50,7 +51,9 @@ By default clusters use external LoadBalancers reachable over the public interne
 
 ### Private Service Connect (recommended for GCP-resident sources and targets)
 
-Set `enable_psc = true` and provide `psc_consumer_project_ids` in the cluster's `terraform.tfvars`. After apply, `cluster.sh` prints a `PSC URI` — supply this as `source_connectivity.service_attachment` or `target_connectivity.service_attachment` in the migration console.
+1. Optionally add `psc_consumer_project_ids = ["<migration-project-id>"]` to `terraform.tfvars` to pre-authorize the migration project. If omitted, `cluster.sh` will warn and you can authorize the consumer separately after deploy.
+2. Run `./cluster.sh up <config> --private-networking`.
+3. After apply, `cluster.sh` prints a `PSC URI` — supply this as `source_connectivity.service_attachment` or `target_connectivity.service_attachment` in the migration console.
 
 The cluster owner must accept the PSC connection from the migration project before the link becomes `ACTIVE`.
 

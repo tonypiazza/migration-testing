@@ -131,6 +131,29 @@ resource "helm_release" "opensearch" {
   depends_on = [time_sleep.wait_for_crds]
 }
 
+resource "google_compute_network_peering" "migration" {
+  count = var.vpc_peering.mode == "enabled" ? 1 : 0
+
+  name         = "${local.cluster_name}-peer-migration"
+  network      = module.cluster.network_self_link
+  peer_network = var.vpc_peering.peer_vpc_self_link
+}
+
+resource "google_compute_firewall" "peer_ingress" {
+  count = var.vpc_peering.mode == "enabled" && length(var.vpc_peering.peer_cidrs) > 0 ? 1 : 0
+
+  name    = "${local.cluster_name}-peer-ingress"
+  project = var.project_id
+  network = module.cluster.network_self_link
+
+  allow {
+    protocol = "tcp"
+    ports    = ["9200"]
+  }
+
+  source_ranges = var.vpc_peering.peer_cidrs
+}
+
 resource "time_sleep" "wait_for_opensearch" {
   depends_on      = [helm_release.opensearch]
   create_duration = "120s"

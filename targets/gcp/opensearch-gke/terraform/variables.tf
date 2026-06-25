@@ -68,3 +68,14 @@ variable "psc_consumer_project_ids" {
   type        = list(string)
   default     = []
 }
+
+variable "vpc_peering" {
+  description = "VPC peering configuration. Set mode to 'enabled' to peer with the migration cluster VPC."
+  type = object({
+    mode               = optional(string, "none")
+    peer_project       = optional(string, "")
+    peer_vpc_self_link = optional(string, "")
+    peer_cidrs         = optional(list(string), [])
+  })
+  default = { mode = "none" }
+}

@@ -6,13 +6,13 @@ variable "project_id" {
 variable "region" {
   description = "GCP region"
   type        = string
-  default     = "us-central1"
+  default     = "us-south1"
 }
 
 variable "zone" {
   description = "GCP zone (single-zone cluster for cost savings; set to null for regional)"
   type        = string
-  default     = "us-central1-c"
+  default     = null
 }
 
 variable "name_prefix" {
@@ -36,13 +36,13 @@ variable "node_count" {
 variable "disk_size_gb" {
   description = "Boot disk size in GB for each node"
   type        = number
-  default     = 50
+  default     = 80
 }
 
 variable "elasticsearch_version" {
   description = "Elasticsearch version to deploy"
   type        = string
-  default     = "8.17.0"
+  default     = "8.19.15"
 }
 
 variable "eck_version" {
@@ -67,4 +67,27 @@ variable "psc_consumer_project_ids" {
   description = "GCP project IDs allowed to connect via PSC (required when enable_psc = true)"
   type        = list(string)
   default     = []
+}
+
+variable "vpc_peering" {
+  description = "VPC peering configuration. Set mode to 'enabled' to peer with the migration cluster VPC."
+  type = object({
+    mode               = optional(string, "none")
+    peer_project       = optional(string, "")
+    peer_vpc_self_link = optional(string, "")
+    peer_cidrs         = optional(list(string), [])
+  })
+  default = { mode = "none" }
+}
+
+variable "snapshot_bucket" {
+  description = "GCS bucket for Elasticsearch snapshots"
+  type        = string
+  default     = "aiven-sa-demo-es-snapshots"
+}
+
+variable "snapshot_base_path" {
+  description = "Base path within the snapshot bucket"
+  type        = string
+  default     = "snapshots/optimized"
 }

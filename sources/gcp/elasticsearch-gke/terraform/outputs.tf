@@ -43,3 +43,8 @@ output "psc_enabled" {
   description = "Whether PSC producer is enabled"
   value       = var.enable_psc
 }
+
+output "peering_state" {
+  description = "VPC peering state (ACTIVE/INACTIVE/empty when peering is not enabled). The peer must create a reciprocal peering from their VPC back to vpc_network_self_link."
+  value       = var.vpc_peering.mode == "enabled" ? google_compute_network_peering.migration[0].state : ""
+}

@@ -18,5 +18,13 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.6"
     }
+    elasticstack = {
+      source  = "elastic/elasticstack"
+      version = "~> 0.11"
+    }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.12"
+    }
   }
 }

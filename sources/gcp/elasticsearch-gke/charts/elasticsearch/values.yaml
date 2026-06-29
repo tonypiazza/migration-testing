@@ -23,3 +23,5 @@ http:
     subnet: ""
     natSubnet: ""
     consumerProjectIds: []
+    dnsName: ""
+    connectionLimit: 10

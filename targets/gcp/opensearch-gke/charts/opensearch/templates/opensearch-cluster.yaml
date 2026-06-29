@@ -45,6 +45,9 @@ spec:
         generate: true
       http:
         generate: true
+        {{- if .Values.http.psc.dnsName }}
+        customFQDN: {{ .Values.http.psc.dnsName | quote }}
+        {{- end }}
   dashboards:
     enable: false
     replicas: 0
@@ -108,6 +111,6 @@ spec:
   consumerAllowList:
     {{- range .Values.http.psc.consumerProjectIds }}
     - project: {{ . }}
-      connectionLimit: 10
+      connectionLimit: {{ $.Values.http.psc.connectionLimit }}
     {{- end }}
 {{- end }}

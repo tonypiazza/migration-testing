@@ -5,6 +5,12 @@ metadata:
 spec:
   version: {{ .Values.version }}
   http:
+    {{- if .Values.http.psc.dnsName }}
+    tls:
+      selfSignedCertificate:
+        subjectAltNames:
+        - dns: {{ .Values.http.psc.dnsName | quote }}
+    {{- end }}
     service:
       metadata:
         annotations:
@@ -67,6 +73,6 @@ spec:
   consumerAllowList:
     {{- range .Values.http.psc.consumerProjectIds }}
     - project: {{ . }}
-      connectionLimit: 10
+      connectionLimit: {{ $.Values.http.psc.connectionLimit }}
     {{- end }}
 {{- end }}

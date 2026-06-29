@@ -73,17 +73,27 @@ resource "helm_release" "elasticsearch" {
 
   set {
     name  = "http.psc.subnet"
-    value = var.enable_psc ? module.cluster.subnet_name : ""
+    value = var.enable_psc ? module.cluster.subnet_self_link : ""
   }
 
   set {
     name  = "http.psc.natSubnet"
-    value = var.enable_psc ? google_compute_subnetwork.psc[0].id : ""
+    value = var.enable_psc ? google_compute_subnetwork.psc[0].self_link : ""
   }
 
   set {
     name  = "http.psc.consumerProjectIds"
     value = "{${join(",", var.psc_consumer_project_ids)}}"
+  }
+
+  set {
+    name  = "http.psc.dnsName"
+    value = var.psc_dns_name
+  }
+
+  set {
+    name  = "http.psc.connectionLimit"
+    value = var.connection_limit
   }
 
   depends_on = [helm_release.eck_operator]
@@ -96,7 +106,7 @@ resource "google_compute_subnetwork" "psc" {
   project       = var.project_id
   region        = var.region
   network       = module.cluster.network_id
-  ip_cidr_range = "10.100.0.0/24"
+  ip_cidr_range = var.psc_nat_cidr
   purpose       = "PRIVATE_SERVICE_CONNECT"
 }
 
@@ -140,6 +150,21 @@ data "kubernetes_secret" "es_password" {
 data "kubernetes_service" "es_http" {
   metadata {
     name      = "es-source-es-http"
+    namespace = "default"
+  }
+
+  depends_on = [time_sleep.wait_for_elasticsearch]
+}
+
+# Reads the PSC ServiceAttachment URI the GKE controller publishes (populated
+# asynchronously after the internal LB is provisioned; may be empty on first apply).
+data "kubernetes_resource" "psc_attachment" {
+  count       = var.enable_psc ? 1 : 0
+  api_version = "networking.gke.io/v1"
+  kind        = "ServiceAttachment"
+
+  metadata {
+    name      = "es-source-psc"
     namespace = "default"
   }
 

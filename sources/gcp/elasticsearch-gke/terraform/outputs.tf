@@ -48,3 +48,8 @@ output "peering_state" {
   description = "VPC peering state (ACTIVE/INACTIVE/empty when peering is not enabled). The peer must create a reciprocal peering from their VPC back to vpc_network_self_link."
   value       = var.vpc_peering.mode == "enabled" ? google_compute_network_peering.migration[0].state : ""
 }
+
+output "psc_service_attachment" {
+  description = "PSC service-attachment URI to give the migration consumer as source_connectivity.service_attachment. Empty until the GKE controller publishes it (and when enable_psc = false)."
+  value       = var.enable_psc ? try(data.kubernetes_resource.psc_attachment[0].object.status.serviceAttachmentURL, "") : ""
+}

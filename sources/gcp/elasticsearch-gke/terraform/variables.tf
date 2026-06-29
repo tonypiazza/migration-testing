@@ -91,3 +91,21 @@ variable "snapshot_base_path" {
   type        = string
   default     = "snapshots/optimized"
 }
+
+variable "psc_dns_name" {
+  description = "Optional hostname to add as a SAN on the Elasticsearch HTTP cert (so a PSC consumer can connect by hostname with valid TLS). Only meaningful with enable_psc = true; empty leaves the operator's default cert unchanged."
+  type        = string
+  default     = ""
+}
+
+variable "connection_limit" {
+  description = "Per-consumer-project connection limit on the PSC service attachment."
+  type        = number
+  default     = 10
+}
+
+variable "psc_nat_cidr" {
+  description = "IP range for the PSC NAT subnet (PRIVATE_SERVICE_CONNECT purpose)."
+  type        = string
+  default     = "10.100.0.0/24"
+}

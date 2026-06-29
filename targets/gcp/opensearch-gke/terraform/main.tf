@@ -47,7 +47,7 @@ resource "google_compute_subnetwork" "psc" {
   project       = var.project_id
   region        = var.region
   network       = module.cluster.network_id
-  ip_cidr_range = "10.100.0.0/24"
+  ip_cidr_range = var.psc_nat_cidr
   purpose       = "PRIVATE_SERVICE_CONNECT"
 }
 
@@ -124,6 +124,16 @@ resource "helm_release" "opensearch" {
     value = "{${join(",", var.psc_consumer_project_ids)}}"
   }
 
+  set {
+    name  = "http.psc.dnsName"
+    value = var.psc_dns_name
+  }
+
+  set {
+    name  = "http.psc.connectionLimit"
+    value = var.connection_limit
+  }
+
   lifecycle {
     ignore_changes = [set]
   }
@@ -162,6 +172,21 @@ resource "time_sleep" "wait_for_opensearch" {
 data "kubernetes_service" "os_http" {
   metadata {
     name      = "os-target-external"
+    namespace = "default"
+  }
+
+  depends_on = [time_sleep.wait_for_opensearch]
+}
+
+# Reads the PSC ServiceAttachment URI the GKE controller publishes (populated
+# asynchronously after the internal LB is provisioned; may be empty on first apply).
+data "kubernetes_resource" "psc_attachment" {
+  count       = var.enable_psc ? 1 : 0
+  api_version = "networking.gke.io/v1"
+  kind        = "ServiceAttachment"
+
+  metadata {
+    name      = "os-target-psc"
     namespace = "default"
   }
 

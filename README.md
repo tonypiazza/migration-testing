@@ -57,6 +57,27 @@ By default clusters use external LoadBalancers reachable over the public interne
 
 The cluster owner must accept the PSC connection from the migration project before the link becomes `ACTIVE`.
 
+### Connecting to the Migration Assistant (PSC)
+
+The Migration Assistant (`opensearch-migrations`, GCP Terraform deployment) is the PSC
+**consumer**. After bringing a producer up with `--private-networking`, hand these values
+to the consumer's `source_connectivity` / `target_connectivity` config:
+
+| Producer output (this repo) | Consumer variable (opensearch-migrations) |
+|-----------------------------|--------------------------------------------|
+| `psc_service_attachment`    | `*_connectivity.service_attachment`        |
+| the `psc_dns_name` you set  | `*_connectivity.dns_name`                  |
+| `vpc_network_self_link`     | `*_connectivity.peer_vpc_self_link` (VPC peering only) |
+
+**TLS by hostname:** set `psc_dns_name` to the hostname the consumer will use. The cluster's
+HTTP certificate is then issued with that name as a Subject Alternative Name, so the
+consumer (which maps the hostname to the PSC endpoint IP via a private DNS zone) validates
+TLS normally. If you leave `psc_dns_name` empty, the consumer must connect by IP with
+relaxed TLS verification.
+
+> `psc_service_attachment` is published asynchronously by GKE; it may be empty immediately
+> after apply and populate on a later `terraform refresh`. `cluster.sh info` polls for it.
+
 ### VPC Peering (for self-managed clusters in another GCP VPC)
 
 Set the `vpc_peering` block in `terraform.tfvars`. After apply, the migration cluster must create the reciprocal peering targeting the `vpc_network_self_link` Terraform output. CIDRs must not overlap with `10.0.0.0/20` (nodes), `10.4.0.0/14` (pods), or `10.8.0.0/20` (services).

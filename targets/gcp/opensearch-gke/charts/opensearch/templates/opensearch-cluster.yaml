@@ -24,7 +24,7 @@ stringData:
         - "admin"
       description: "Admin user"
 ---
-apiVersion: opensearch.opster.io/v1
+apiVersion: opensearch.org/v1
 kind: OpenSearchCluster
 metadata:
   name: {{ .Values.clusterName }}
@@ -83,7 +83,7 @@ metadata:
 spec:
   type: {{ .Values.http.type }}
   selector:
-    opster.io/opensearch-cluster: {{ .Values.clusterName }}
+    opensearch.org/opensearch-cluster: {{ .Values.clusterName }}
   ports:
     - name: https
       port: 9200

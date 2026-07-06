@@ -75,6 +75,14 @@ consumer (which maps the hostname to the PSC endpoint IP via a private DNS zone)
 TLS normally. If you leave `psc_dns_name` empty, the consumer must connect by IP with
 relaxed TLS verification.
 
+> **Requires OpenSearch operator >= 2.8.0** (the `operator_version` default). 2.8.0 is the
+> first release whose CRD defines `tls.http.customFQDN`, the field the OpenSearch chart uses
+> to carry `psc_dns_name` into the cert ([opensearch-k8s-operator#1147](https://github.com/opensearch-project/opensearch-k8s-operator/pull/1147)).
+> On older operators (e.g. 2.7.0) the Kubernetes API **silently prunes** the field — no error —
+> and the served cert carries only the default cluster DNS names, so hostname TLS will fail.
+> (The ECK-based ES source uses `subjectAltNames` instead, a long-standing ECK field, so it is
+> not subject to this floor.)
+
 > `psc_service_attachment` is published asynchronously by GKE; it may be empty immediately
 > after apply and populate on a later `terraform refresh`. `cluster.sh info` polls for it.
 

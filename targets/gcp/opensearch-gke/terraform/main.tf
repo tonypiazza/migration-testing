@@ -56,6 +56,33 @@ resource "random_password" "opensearch_admin" {
   special = false
 }
 
+# cert-manager: the OpenSearch operator (>= 2.8.0) webhook issues its serving cert via
+# cert-manager (webhook.certManager.enabled defaults true), so its CRDs must exist first.
+resource "helm_release" "cert_manager" {
+  name             = "cert-manager"
+  repository       = "https://charts.jetstack.io"
+  chart            = "cert-manager"
+  version          = var.cert_manager_version
+  namespace        = "cert-manager"
+  create_namespace = true
+
+  # Install cert-manager's CRDs (Certificate, Issuer, ...) with the chart.
+  set {
+    name  = "crds.enabled"
+    value = "true"
+  }
+
+  depends_on = [module.cluster]
+}
+
+# Give the cert-manager webhook time to become ready before the operator install
+# renders Certificate/Issuer resources that the webhook must admit.
+resource "time_sleep" "wait_for_cert_manager" {
+  create_duration = "60s"
+
+  depends_on = [helm_release.cert_manager]
+}
+
 resource "helm_release" "opensearch_operator" {
   name             = "opensearch-operator"
   repository       = "https://opensearch-project.github.io/opensearch-k8s-operator/"
@@ -69,7 +96,7 @@ resource "helm_release" "opensearch_operator" {
     value = "registry.k8s.io/kubebuilder/kube-rbac-proxy"
   }
 
-  depends_on = [module.cluster]
+  depends_on = [module.cluster, time_sleep.wait_for_cert_manager]
 }
 
 resource "time_sleep" "wait_for_crds" {
@@ -110,8 +137,11 @@ resource "helm_release" "opensearch" {
   }
 
   set {
+    # GKE's networking.gke.io/internal-load-balancer-subnet annotation expects the subnet
+    # NAME, not a self-link — it prepends .../subnetworks/ itself, so a full self-link produces
+    # a malformed doubled URL and the ILB never gets an IP. (natSubnet below wants a self-link.)
     name  = "http.psc.subnet"
-    value = var.enable_psc ? module.cluster.subnet_self_link : ""
+    value = var.enable_psc ? module.cluster.subnet_name : ""
   }
 
   set {

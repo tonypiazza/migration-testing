@@ -46,9 +46,22 @@ variable "opensearch_version" {
 }
 
 variable "operator_version" {
-  description = "OpenSearch Kubernetes Operator Helm chart version"
+  # 2.8.0 is the floor: it is the first operator release that (a) supports OpenSearch 3.x
+  # and (b) defines the tls.http.customFQDN field that psc_dns_name relies on. On 2.7.0 the
+  # customFQDN field is silently pruned by the Kubernetes API (no error), so the hostname
+  # never lands in the served cert's SANs.
+  description = "OpenSearch Kubernetes Operator Helm chart version (>= 2.8.0 required for OpenSearch 3.x and psc_dns_name/customFQDN)"
   type        = string
-  default     = "2.7.0"
+  default     = "2.8.4"
+}
+
+variable "cert_manager_version" {
+  # Required by operator >= 2.8.0: the operator chart's admission webhook renders
+  # cert-manager Certificate/Issuer resources (webhook.certManager.enabled defaults true),
+  # so cert-manager and its CRDs must be present before the operator installs.
+  description = "cert-manager Helm chart version (dependency of the OpenSearch operator webhook)"
+  type        = string
+  default     = "v1.19.6"
 }
 
 variable "allowed_cidrs" {
@@ -81,7 +94,7 @@ variable "vpc_peering" {
 }
 
 variable "psc_dns_name" {
-  description = "Optional hostname to add as a SAN on the OpenSearch HTTP cert (so a PSC consumer can connect by hostname with valid TLS). Only meaningful with enable_psc = true; empty leaves the operator's default cert unchanged."
+  description = "Optional hostname to add as a SAN on the OpenSearch HTTP cert (so a PSC consumer can connect by hostname with valid TLS). Requires operator_version >= 2.8.0 (the customFQDN CRD field); on older operators the hostname is silently dropped from the cert. Only meaningful with enable_psc = true; empty leaves the operator's default cert unchanged."
   type        = string
   default     = ""
 }

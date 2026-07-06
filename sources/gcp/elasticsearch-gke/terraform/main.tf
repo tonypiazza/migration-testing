@@ -72,8 +72,11 @@ resource "helm_release" "elasticsearch" {
   }
 
   set {
+    # GKE's networking.gke.io/internal-load-balancer-subnet annotation expects the subnet
+    # NAME, not a self-link — it prepends .../subnetworks/ itself, so a full self-link produces
+    # a malformed doubled URL and the ILB never gets an IP. (natSubnet below wants a self-link.)
     name  = "http.psc.subnet"
-    value = var.enable_psc ? module.cluster.subnet_self_link : ""
+    value = var.enable_psc ? module.cluster.subnet_name : ""
   }
 
   set {
@@ -171,19 +174,21 @@ data "kubernetes_resource" "psc_attachment" {
   depends_on = [time_sleep.wait_for_elasticsearch]
 }
 
-provider "elasticstack" {
-  elasticsearch {
-    username  = "elastic"
-    password  = data.kubernetes_secret.es_password.data["elastic"]
-    endpoints = ["https://${data.kubernetes_service.es_http.status[0].load_balancer[0].ingress[0].ip}:9200"]
-    insecure  = true
-  }
-}
+# Register the snapshot repository from INSIDE the cluster (a Job hitting the ES service
+# DNS), not from the apply host. With PSC the external endpoint is internal-only and
+# unreachable from where terraform runs; service DNS is always reachable in-cluster. This
+# module is engine- and cloud-agnostic (gcs/s3/azure), shared across all source deployments.
+module "snapshot_repo" {
+  source = "../../../../modules/snapshot-repo"
 
-resource "elasticstack_elasticsearch_snapshot_repository" "default" {
-  name = "default"
-
-  gcs {
+  name               = "default"
+  endpoint           = "https://es-source-es-http.${data.kubernetes_service.es_http.metadata[0].namespace}.svc:9200"
+  namespace          = "default"
+  username           = "elastic"
+  credentials_secret = "es-source-es-elastic-user"
+  password_key       = "elastic"
+  repo_type          = "gcs"
+  repo_settings = {
     bucket    = var.snapshot_bucket
     base_path = var.snapshot_base_path
   }

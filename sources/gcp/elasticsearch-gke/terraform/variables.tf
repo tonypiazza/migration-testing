@@ -45,6 +45,12 @@ variable "elasticsearch_version" {
   default     = "8.19.15"
 }
 
+variable "install_gcs_plugin" {
+  description = "Install the repository-gcs plugin via an init container. Required for GCS snapshot repositories on Elasticsearch 7.x (bundled in 8.0+). Set true when elasticsearch_version is < 8.0."
+  type        = bool
+  default     = false
+}
+
 variable "eck_version" {
   description = "ECK operator version"
   type        = string

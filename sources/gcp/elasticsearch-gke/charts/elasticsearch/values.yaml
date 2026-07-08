@@ -1,6 +1,10 @@
 clusterName: es-source
 version: "8.17.0"
 
+# Install the repository-gcs plugin via an init container. Needed on Elasticsearch 7.x
+# (GCS support is bundled in 8.0+). Leave false for 8.x.
+installGcsPlugin: false
+
 nodeSets:
   - name: default
     count: 3

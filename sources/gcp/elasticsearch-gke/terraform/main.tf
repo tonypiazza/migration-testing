@@ -62,6 +62,12 @@ resource "helm_release" "elasticsearch" {
   }
 
   set {
+    # ES 7.x needs the repository-gcs plugin installed (bundled in 8.0+).
+    name  = "installGcsPlugin"
+    value = tostring(var.install_gcs_plugin)
+  }
+
+  set {
     name  = "http.allowedCIDRs"
     value = "{${join(",", var.allowed_cidrs)}}"
   }

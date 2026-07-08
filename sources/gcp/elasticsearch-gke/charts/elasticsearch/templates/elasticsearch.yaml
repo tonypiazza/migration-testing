@@ -34,6 +34,18 @@ spec:
       node.store.allow_mmap: false
     podTemplate:
       spec:
+        {{- if $.Values.installGcsPlugin }}
+        # repository-gcs is bundled in Elasticsearch 8.0+ but must be installed
+        # explicitly on 7.x. Required for GCS snapshot repositories on ES < 8.0.
+        initContainers:
+        - name: install-gcs-plugin
+          command:
+          - sh
+          - -c
+          - |
+            bin/elasticsearch-plugin remove --purge repository-gcs || true
+            bin/elasticsearch-plugin install --batch repository-gcs
+        {{- end }}
         containers:
         - name: elasticsearch
           env:

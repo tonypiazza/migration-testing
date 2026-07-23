@@ -22,20 +22,42 @@ check_prerequisites() {
     missing=1
   fi
 
-  if ! command -v gcloud >/dev/null 2>&1; then
-    echo "Error: gcloud CLI not found. Install from https://cloud.google.com/sdk/docs/install"
-    missing=1
-  fi
-
-  if [[ $missing -eq 0 ]] && ! gcloud auth application-default print-access-token >/dev/null 2>&1; then
-    echo "Error: Application Default Credentials not configured."
-    echo "Run: gcloud auth application-default login"
-    missing=1
-  fi
-
   if [[ $missing -ne 0 ]]; then
     exit 1
   fi
+}
+
+# Platform-specific cloud CLI + credentials checks. Called from the actions that touch a
+# real cluster (up/info/down) after PLATFORM is known. NOT called by 'specs', which works
+# offline with no credentials.
+check_cloud_prerequisites() {
+  local missing=0
+  case "$PLATFORM" in
+    gcp)
+      if ! command -v gcloud >/dev/null 2>&1; then
+        echo "Error: gcloud CLI not found. Install from https://cloud.google.com/sdk/docs/install"
+        missing=1
+      fi
+      if [[ $missing -eq 0 ]] && ! gcloud auth application-default print-access-token >/dev/null 2>&1; then
+        echo "Error: Application Default Credentials not configured."
+        echo "Run: gcloud auth application-default login"
+        missing=1
+      fi
+      ;;
+    aws)
+      if ! command -v aws >/dev/null 2>&1; then
+        echo "Error: aws CLI not found. Install from https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
+        missing=1
+      fi
+      if [[ $missing -eq 0 ]] && ! aws sts get-caller-identity >/dev/null 2>&1; then
+        echo "Error: AWS credentials not configured or invalid."
+        echo "Configure via 'aws configure' or environment variables / SSO."
+        missing=1
+      fi
+      ;;
+  esac
+  [[ $missing -ne 0 ]] && exit 1
+  return 0
 }
 
 check_prerequisites
@@ -130,15 +152,19 @@ disconnect() {
 }
 
 connect() {
-  local cluster_name location project_id
+  local cluster_name location
   cluster_name="$($TF_CMD -chdir="$TF_DIR" output -raw cluster_name)"
   location="$($TF_CMD -chdir="$TF_DIR" output -raw location)"
-  project_id="$($TF_CMD -chdir="$TF_DIR" output -raw project_id)"
 
   case "$PLATFORM" in
     gcp)
+      local project_id
+      project_id="$($TF_CMD -chdir="$TF_DIR" output -raw project_id)"
       gcloud container clusters get-credentials "$cluster_name" \
         --location "$location" --project "$project_id" --quiet
+      ;;
+    aws)
+      aws eks update-kubeconfig --name "$cluster_name" --region "$location" >/dev/null
       ;;
   esac
 }
@@ -158,6 +184,30 @@ wait_for_lb_ip() {
     fi
     if [[ $elapsed -eq 0 ]]; then
       echo "Waiting for LoadBalancer IP on service ${svc}..." >&2
+    fi
+    sleep "$interval"
+    elapsed=$((elapsed + interval))
+  done
+
+  echo "pending"
+  return 1
+}
+
+wait_for_lb_hostname() {
+  local svc="$1"
+  local timeout="${2:-300}"
+  local elapsed=0
+  local interval=5
+  local host=""
+
+  while [[ $elapsed -lt $timeout ]]; do
+    host="$(kubectl get svc "$svc" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)"
+    if [[ -n "$host" ]]; then
+      echo "$host"
+      return 0
+    fi
+    if [[ $elapsed -eq 0 ]]; then
+      echo "Waiting for LoadBalancer hostname on service ${svc}..." >&2
     fi
     sleep "$interval"
     elapsed=$((elapsed + interval))
@@ -225,6 +275,15 @@ print_info() {
         psc_uri="$(wait_for_psc_uri os-target-psc)" || true
       fi
       ;;
+    elasticsearch-eks)
+      ip="$(wait_for_lb_hostname es-source-es-http)" || true
+      user="elastic"
+      password="$(kubectl get secret es-source-es-elastic-user -o jsonpath='{.data.elastic}' 2>/dev/null | base64 -d)" || password="pending"
+      [[ -z "$password" ]] && password="pending"
+      if [[ "$($TF_CMD -chdir="$TF_DIR" output -raw psc_enabled 2>/dev/null)" == "true" ]]; then
+        psc_uri="$($TF_CMD -chdir="$TF_DIR" output -raw privatelink_service_name 2>/dev/null)" || true
+      fi
+      ;;
   esac
 
   local software
@@ -262,6 +321,7 @@ validate_private_networking() {
 }
 
 do_up() {
+  check_cloud_prerequisites
   echo "Initializing Terraform..."
   $TF_CMD -chdir="$TF_DIR" init
 
@@ -278,6 +338,7 @@ do_up() {
 }
 
 do_down() {
+  check_cloud_prerequisites
   if ! $TF_CMD -chdir="$TF_DIR" output -raw cluster_name >/dev/null 2>&1; then
     echo ""
     echo "Nothing to destroy. No terraform state exists for this config."
@@ -304,6 +365,7 @@ do_down() {
 }
 
 do_info() {
+  check_cloud_prerequisites
   print_info
 }
 
@@ -353,6 +415,10 @@ do_specs() {
   region="$(get_effective region)"
   zone="$(get_effective zone)"
   machine_type="$(get_effective machine_type)"
+  # AWS configs name the node size variable instance_type rather than machine_type.
+  if [[ -z "$machine_type" ]]; then
+    machine_type="$(get_effective instance_type)"
+  fi
   node_count="$(get_effective node_count)"
   disk_size_gb="$(get_effective disk_size_gb)"
 
@@ -365,6 +431,10 @@ do_specs() {
     opensearch-gke)
       software_label="OpenSearch"
       software_version="$(get_effective opensearch_version)"
+      ;;
+    elasticsearch-eks)
+      software_label="Elasticsearch"
+      software_version="$(get_effective elasticsearch_version)"
       ;;
     *)
       software_label="Unknown"

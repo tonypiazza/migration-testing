@@ -1,0 +1,32 @@
+clusterName: es-source
+version: "8.19.15"
+
+# IRSA: the Terraform config annotates this ServiceAccount with the IAM role ARN so
+# Elasticsearch pods reach S3 for snapshots. repository-s3 only reads the web-identity
+# token from its own config dir, so the pod also projects the token there (see template).
+serviceAccountName: es-source
+irsaRoleArn: ""
+
+nodeSets:
+  - name: default
+    count: 3
+    javaOpts: "-Xms4g -Xmx4g"
+    resources:
+      requests:
+        memory: 8Gi
+        cpu: 2
+      limits:
+        memory: 8Gi
+        cpu: 4
+    storage: 50Gi
+
+http:
+  # When true, the NLB is provisioned internal (for PrivateLink) instead of internet-facing.
+  internal: false
+  allowedCIDRs:
+    - "0.0.0.0/0"
+  # Tag applied to the NLB so Terraform can discover it (data "aws_lb") to wire PrivateLink.
+  # Set by Terraform to "es-privatelink=<cluster_name>".
+  nlbTag: ""
+  # Optional hostname added as a SAN on the ES HTTP cert (PrivateLink-by-hostname parity).
+  dnsName: ""

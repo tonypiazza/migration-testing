@@ -1,0 +1,93 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.serviceAccountName }}
+  {{- if .Values.irsaRoleArn }}
+  annotations:
+    eks.amazonaws.com/role-arn: {{ .Values.irsaRoleArn | quote }}
+  {{- end }}
+---
+apiVersion: elasticsearch.k8s.elastic.co/v1
+kind: Elasticsearch
+metadata:
+  name: {{ .Values.clusterName }}
+spec:
+  version: {{ .Values.version }}
+  http:
+    {{- if .Values.http.dnsName }}
+    tls:
+      selfSignedCertificate:
+        subjectAltNames:
+        - dns: {{ .Values.http.dnsName | quote }}
+    {{- end }}
+    service:
+      metadata:
+        annotations:
+          # AWS Load Balancer Controller: provision an NLB with IP targets. No ssl-cert /
+          # ssl-ports / backend-protocol annotations => plain TCP passthrough, so ES
+          # terminates its own TLS end-to-end.
+          service.beta.kubernetes.io/aws-load-balancer-type: "external"
+          service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: "ip"
+          service.beta.kubernetes.io/aws-load-balancer-scheme: {{ if .Values.http.internal }}"internal"{{ else }}"internet-facing"{{ end }}
+          {{- if .Values.http.nlbTag }}
+          service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags: {{ .Values.http.nlbTag | quote }}
+          {{- end }}
+      spec:
+        type: LoadBalancer
+        {{- if not .Values.http.internal }}
+        loadBalancerSourceRanges:
+        {{- range .Values.http.allowedCIDRs }}
+          - {{ . | quote }}
+        {{- end }}
+        {{- end }}
+  nodeSets:
+  {{- range .Values.nodeSets }}
+  - name: {{ .name }}
+    count: {{ .count }}
+    config:
+      node.store.allow_mmap: false
+    podTemplate:
+      spec:
+        serviceAccountName: {{ $.Values.serviceAccountName }}
+        containers:
+        - name: elasticsearch
+          env:
+          - name: ES_JAVA_OPTS
+            value: {{ .javaOpts | quote }}
+          # IRSA for repository-s3: point the AWS SDK at the projected web-identity token.
+          - name: AWS_WEB_IDENTITY_TOKEN_FILE
+            value: /usr/share/elasticsearch/config/repository-s3/aws-web-identity-token-file
+          {{- if $.Values.irsaRoleArn }}
+          - name: AWS_ROLE_ARN
+            value: {{ $.Values.irsaRoleArn | quote }}
+          {{- end }}
+          resources:
+            requests:
+              memory: {{ .resources.requests.memory }}
+              cpu: {{ .resources.requests.cpu | quote }}
+            limits:
+              memory: {{ .resources.limits.memory }}
+              cpu: {{ .resources.limits.cpu | quote }}
+          volumeMounts:
+          - name: aws-iam-token
+            mountPath: /usr/share/elasticsearch/config/repository-s3
+        volumes:
+        # Project the SA token INTO the repository-s3 config dir. EKS's default IRSA
+        # injection puts the token elsewhere, which the plugin can't read.
+        - name: aws-iam-token
+          projected:
+            sources:
+            - serviceAccountToken:
+                audience: sts.amazonaws.com
+                expirationSeconds: 86400
+                path: aws-web-identity-token-file
+    volumeClaimTemplates:
+    - metadata:
+        name: elasticsearch-data
+      spec:
+        accessModes:
+        - ReadWriteOnce
+        resources:
+          requests:
+            storage: {{ .storage }}
+  {{- end }}

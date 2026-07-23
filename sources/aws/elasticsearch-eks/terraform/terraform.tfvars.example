@@ -1,0 +1,35 @@
+# Optional overrides:
+# name_prefix              = "es-tony"
+# elasticsearch_version    = "8.19.15"
+# region                   = "us-east-2"
+# kubernetes_version       = "1.33"
+# instance_type            = "m5.xlarge"
+# node_count               = 3
+# disk_size_gb             = 80
+# eck_version              = "2.14.0"
+# allowed_cidrs            = ["203.0.113.0/24"]
+
+# The S3 snapshot bucket must already exist:
+# snapshot_bucket    = "aiven-sa-demo-es-snapshots"
+# snapshot_base_path = "snapshots/optimized"
+
+# PrivateLink (private networking, enabled via cluster.sh --private-networking):
+# Exposes Elasticsearch via an internal NLB + VPC endpoint service instead of a public NLB.
+# After apply, use the privatelink_service_name output printed by cluster.sh as the
+# migration console's source_connectivity.service_attachment input.
+# enable_psc                     = true
+# privatelink_allowed_principals = ["arn:aws:iam::123456789012:root"]
+# psc_dns_name                   = "es.internal.example.com"
+
+# VPC Peering:
+# Peers this VPC with the migration cluster's VPC so Elasticsearch is reachable over
+# internal IPs. After apply, the migration side must accept the peering
+# (peering_connection_id output) and add reciprocal routes. peer_cidrs must not overlap
+# with this cluster's VPC CIDR (10.0.0.0/16).
+# vpc_peering = {
+#   mode          = "enabled"
+#   peer_owner_id = "123456789012"
+#   peer_vpc_id   = "vpc-0abc123"
+#   peer_region   = "us-east-2"
+#   peer_cidrs    = ["10.20.0.0/16"]
+# }

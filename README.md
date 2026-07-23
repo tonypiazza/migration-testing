@@ -4,9 +4,12 @@ Spin up and tear down Elasticsearch (source) and OpenSearch (target) clusters fo
 
 ## Prerequisites
 
-- [gcloud CLI](https://cloud.google.com/sdk/docs/install) with Application Default Credentials configured (`gcloud auth application-default login`)
 - [terraform](https://www.terraform.io/downloads) or [tofu](https://opentofu.org/docs/intro/install)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
+- For **GCP** configs: [gcloud CLI](https://cloud.google.com/sdk/docs/install) with Application Default Credentials configured (`gcloud auth application-default login`)
+- For **AWS** configs: [aws CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) with working credentials (`aws sts get-caller-identity` must succeed). The S3 snapshot bucket (`aiven-sa-demo-es-snapshots` by default) must already exist.
+
+Cloud CLI/credential checks run per-platform only for `up`/`info`/`down`; `specs` works offline.
 
 ## Quick Start
 
@@ -22,6 +25,7 @@ cp sources/gcp/elasticsearch-gke/terraform/terraform.tfvars.example \
 ```bash
 ./cluster.sh up sources/gcp/elasticsearch-gke
 ./cluster.sh up targets/gcp/opensearch-gke
+./cluster.sh up sources/aws/elasticsearch-eks   # AWS equivalent of the GCP ES source
 ```
 
 3. Use the printed connection details to configure the migration assistant.
@@ -92,15 +96,66 @@ Set the `vpc_peering` block in `terraform.tfvars`. After apply, the migration cl
 
 See `terraform.tfvars.example` in each config for full examples.
 
+## AWS source (`sources/aws/elasticsearch-eks`)
+
+The AWS-equivalent of `sources/gcp/elasticsearch-gke`: Elasticsearch on EKS via the ECK
+operator, with an S3 snapshot repository. It uses the same `cluster.sh` interface.
+
+```bash
+./cluster.sh up   sources/aws/elasticsearch-eks [--private-networking]
+./cluster.sh info sources/aws/elasticsearch-eks
+./cluster.sh specs sources/aws/elasticsearch-eks
+./cluster.sh down sources/aws/elasticsearch-eks
+```
+
+Prerequisites: `aws` CLI + working credentials, `kubectl`, `tofu`/`terraform`, and the S3
+bucket `aiven-sa-demo-es-snapshots` (override with `snapshot_bucket`) already created.
+Elasticsearch pods reach S3 via IRSA — a least-privilege IAM role scoped to that bucket,
+assumed through the pod service account. The public endpoint is a Network Load Balancer
+provisioned by the AWS Load Balancer Controller; `cluster.sh info` prints its **DNS
+hostname** (AWS LBs expose a hostname, not an IP) under the `IP:` line.
+
+### Private Networking (AWS PrivateLink)
+
+`--private-networking` (which sets `enable_psc=true`) provisions an **internal** NLB plus an
+`aws_vpc_endpoint_service` (AWS PrivateLink) — the AWS analog of GCP Private Service Connect.
+
+1. Add `privatelink_allowed_principals = ["arn:aws:iam::<account-id>:root"]` to
+   `terraform.tfvars` to authorize the migration account's principal(s).
+2. Optionally set `psc_dns_name` to the hostname the consumer will use; it is added as a
+   Subject Alternative Name on the ES HTTP cert (same mechanism as the GCP source's ECK
+   `subjectAltNames`), so the consumer validates TLS by hostname.
+3. Run `./cluster.sh up sources/aws/elasticsearch-eks --private-networking`.
+4. After apply, `cluster.sh` prints a `PSC URI` — this is the `privatelink_service_name`
+   output (a `com.amazonaws.vpce.<region>.vpce-svc-...` string). Supply it to the consumer.
+
+The consumer creates an interface VPC endpoint against that service name; because
+`acceptance_required = false`, connections are auto-accepted.
+
+### VPC Peering (AWS)
+
+Set the `vpc_peering` block in `terraform.tfvars` (`peer_owner_id`, `peer_vpc_id`,
+`peer_region`, `peer_cidrs`). After apply, the migration side must **accept** the peering
+connection (`peering_connection_id` output) and add reciprocal routes. `peer_cidrs` must not
+overlap this cluster's VPC CIDR (`10.0.0.0/16`).
+
+### Connecting to the Migration Assistant (AWS)
+
+| Producer output (this repo) | Consumer variable (opensearch-migrations) |
+|-----------------------------|--------------------------------------------|
+| `privatelink_service_name`  | `source_connectivity.service_attachment`   |
+| the `psc_dns_name` you set   | `source_connectivity.dns_name`             |
+| `vpc_id`                    | peer target for the reciprocal VPC peering (VPC peering only) |
+
 ## How It Works
 
 `cluster.sh` is a thin wrapper around Terraform. Each config under `sources/` or `targets/` has a `terraform/` directory that provisions everything — GKE cluster, VPC, and workloads (via the Helm provider).
 
-- `up` runs `terraform init` + `terraform apply -auto-approve`, then connects to the cluster via `gcloud` and queries kubectl for the LoadBalancer IP and credentials.
+- `up` runs `terraform init` + `terraform apply -auto-approve`, then connects to the cluster (via `gcloud` for GCP or `aws eks update-kubeconfig` for AWS) and queries kubectl for the LoadBalancer address and credentials.
 - `down` removes the kubectl context and runs `terraform destroy -auto-approve`.
 - `info` connects and prints the cluster details without modifying anything.
 
-A shared module at `modules/gke-cluster/` provides the common GKE infrastructure (VPC, subnet, cluster, node pool). Each config's `main.tf` calls this module and adds its own Helm releases.
+Shared modules provide the common infrastructure: `modules/gke-cluster/` for GKE (VPC, subnet, cluster, node pool) and `modules/eks-cluster/` for EKS (VPC, cluster, node group, IRSA). Each config's `main.tf` calls the appropriate module and adds its own Helm releases. The `modules/snapshot-repo/` module registers the snapshot repository (GCS or S3) from inside the cluster and is shared across all sources.
 
 ## Adding a New Config
 

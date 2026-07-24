@@ -45,3 +45,6 @@ terraform.rc
 
 .DS_Store
 
+# Internal planning docs (specs/plans) live outside the repo
+docs/superpowers/
+

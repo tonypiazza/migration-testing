@@ -47,4 +47,3 @@ terraform.rc
 
 # Internal planning docs (specs/plans) live outside the repo
 docs/superpowers/
-

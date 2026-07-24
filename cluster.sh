@@ -98,6 +98,7 @@ if [[ "$PRIVATE_NETWORKING" == "true" ]]; then
 fi
 CONFIG_DIR="${SCRIPT_DIR}/${CONFIG_PATH}"
 TF_DIR="${CONFIG_DIR}/terraform"
+# shellcheck disable=SC2034  # parsed for parity with PLATFORM/CONFIG_NAME; kept for readability/future use
 CLUSTER_ROLE="$(echo "$CONFIG_PATH" | cut -d/ -f1)"
 PLATFORM="$(echo "$CONFIG_PATH" | cut -d/ -f2)"
 CONFIG_NAME="$(echo "$CONFIG_PATH" | cut -d/ -f3)"
@@ -356,7 +357,7 @@ do_specs() {
   node_count="$(get_effective node_count)"
   disk_size_gb="$(get_effective disk_size_gb)"
 
-  local software_label software_version_var
+  local software_label
   case "$CONFIG_NAME" in
     elasticsearch-gke)
       software_label="Elasticsearch"

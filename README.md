@@ -1,111 +1,103 @@
 # migration-testing
 
-Spin up and tear down Elasticsearch (source) and OpenSearch (target) clusters for testing migration scenarios.
+Provision throwaway Elasticsearch (source) and OpenSearch (target) clusters on Kubernetes
+for testing search-cluster migrations. A single script, `cluster.sh`, wraps Terraform/OpenTofu
+and Helm to bring clusters up, print their connection details, and tear them down.
+
+## What's here
+
+| Path | Purpose |
+|------|---------|
+| `cluster.sh` | Entry point: `up` / `down` / `info` / `specs` for any config |
+| `sources/<platform>/<name>/` | Source-cluster configs (e.g. Elasticsearch on GKE) |
+| `targets/<platform>/<name>/` | Target-cluster configs (e.g. OpenSearch on GKE) |
+| `modules/` | Shared Terraform modules (GKE cluster, snapshot repo) |
 
 ## Prerequisites
 
-- [gcloud CLI](https://cloud.google.com/sdk/docs/install) with Application Default Credentials configured (`gcloud auth application-default login`)
-- [terraform](https://www.terraform.io/downloads) or [tofu](https://opentofu.org/docs/intro/install)
+- [OpenTofu](https://opentofu.org/docs/intro/install) or [Terraform](https://www.terraform.io/downloads)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
+- [Helm](https://helm.sh/docs/intro/install/)
+- **For GCP configs:** the [gcloud CLI](https://cloud.google.com/sdk/docs/install), authenticated with
+  Application Default Credentials:
+  ```bash
+  gcloud auth application-default login
+  ```
+  You also need a GCP project you can create GKE clusters in, and (for snapshots) a
+  pre-existing storage bucket. The examples below use the project and bucket baked into the
+  config defaults; override them via `terraform.tfvars` for your own environment.
 
-## Quick Start
-
-1. Copy `terraform.tfvars.example` to `terraform.tfvars` in the config you want to use and set your `project_id`:
+## Quick start
 
 ```bash
-cp sources/gcp/elasticsearch-gke/terraform/terraform.tfvars.example \
-   sources/gcp/elasticsearch-gke/terraform/terraform.tfvars
-```
-
-2. Spin up a cluster:
-
-```bash
+# 1. Bring up a source cluster (Elasticsearch on GKE)
 ./cluster.sh up sources/gcp/elasticsearch-gke
+
+# 2. Bring up a target cluster (OpenSearch on GKE)
 ./cluster.sh up targets/gcp/opensearch-gke
-```
 
-3. Use the printed connection details to configure the migration assistant.
+# 3. Re-print connection details any time
+./cluster.sh info sources/gcp/elasticsearch-gke
 
-4. Tear down when done:
-
-```bash
+# 4. Tear everything down when finished
 ./cluster.sh down sources/gcp/elasticsearch-gke
 ./cluster.sh down targets/gcp/opensearch-gke
 ```
 
+`up` prints a summary box with the cluster's address, username, and password once the
+workload is ready.
+
 ## Commands
 
-Run `./cluster.sh` with no arguments to see all available paths.
+Run `./cluster.sh` with no arguments to list available config paths.
 
 | Command | Description |
 |---------|-------------|
-| `./cluster.sh up <path>` | Create cluster |
-| `./cluster.sh up <path> --private-networking` | Create cluster with private networking enabled |
-| `./cluster.sh down <path>` | Destroy cluster |
+| `./cluster.sh up <path>` | Create the cluster |
+| `./cluster.sh up <path> --private-networking` | Create it with private networking (see below) |
+| `./cluster.sh down <path>` | Destroy the cluster |
 | `./cluster.sh info <path>` | Re-print connection details for a running cluster |
-| `./cluster.sh specs <path>` | Print effective cluster specs without a running cluster |
+| `./cluster.sh specs <path>` | Print effective specs without a running cluster |
 
-## Private Networking (GCP)
+## Configs
 
-By default clusters use external LoadBalancers reachable over the public internet. Two opt-in modes make migration traffic private:
+Each config under `sources/` or `targets/` is self-contained: a `terraform/` directory that
+provisions the cluster and its workload (via the Helm provider), and a `charts/` directory
+with the workload's Helm chart. `cluster.sh` is a thin wrapper:
 
-### Private Service Connect (recommended for GCP-resident sources and targets)
+- **up** runs `tofu init` + `tofu apply`, connects with the platform CLI, and reads the
+  workload's address and credentials.
+- **down** removes the kubectl context and runs `tofu destroy`.
+- **info** connects and prints details without changing anything.
+- **specs** reads effective variable values only — no cluster or credentials required.
 
-1. Optionally add `psc_consumer_project_ids = ["<migration-project-id>"]` to `terraform.tfvars` to pre-authorize the migration project. If omitted, `cluster.sh` will warn and you can authorize the consumer separately after deploy.
-2. Run `./cluster.sh up <config> --private-networking`.
-3. After apply, `cluster.sh` prints a `PSC URI` — supply this as `source_connectivity.service_attachment` or `target_connectivity.service_attachment` in the migration console.
+Shared modules keep configs DRY: `modules/gke-cluster` provisions the GKE VPC/cluster/node
+pool, and `modules/snapshot-repo` registers a snapshot repository (GCS or S3) from inside
+the cluster.
 
-The cluster owner must accept the PSC connection from the migration project before the link becomes `ACTIVE`.
+## Private networking
 
-### Connecting to the Migration Assistant (PSC)
+By default clusters are reachable over a public LoadBalancer. Pass `--private-networking`
+to expose the cluster privately instead (on GCP, via Private Service Connect): the workload
+is fronted by an internal load balancer and a service attachment rather than a public IP.
+After apply, `cluster.sh` prints the private service-attachment identifier alongside the
+usual details.
 
-The Migration Assistant (`opensearch-migrations`, GCP Terraform deployment) is the PSC
-**consumer**. After bringing a producer up with `--private-networking`, hand these values
-to the consumer's `source_connectivity` / `target_connectivity` config:
+See each config's `terraform.tfvars.example` for the private-networking variables.
 
-| Producer output (this repo) | Consumer variable (opensearch-migrations) |
-|-----------------------------|--------------------------------------------|
-| `psc_service_attachment`    | `*_connectivity.service_attachment`        |
-| the `psc_dns_name` you set  | `*_connectivity.dns_name`                  |
-| `vpc_network_self_link`     | `*_connectivity.peer_vpc_self_link` (VPC peering only) |
+## Troubleshooting
 
-**TLS by hostname:** set `psc_dns_name` to the hostname the consumer will use. The cluster's
-HTTP certificate is then issued with that name as a Subject Alternative Name, so the
-consumer (which maps the hostname to the PSC endpoint IP via a private DNS zone) validates
-TLS normally. If you leave `psc_dns_name` empty, the consumer must connect by IP with
-relaxed TLS verification.
+- **`tofu`/`terraform` finds no state:** state is stored per-config under
+  `<path>/terraform/`. Always operate through `cluster.sh` (which passes `-chdir`), not by
+  running `tofu` at the repo root.
+- **`info` didn't print the summary box right after `up`:** the kubectl context can be cold
+  immediately after apply. Re-run `./cluster.sh info <path>` after a few seconds.
+- **Address looks like a hostname, not an IP:** AWS load balancers expose a DNS hostname
+  while GCP exposes an IP. Both are correct — connect to whichever is printed.
+- **An `apply` stalls when running several clusters at once:** check your cloud quota
+  (in-use IP addresses, CPUs, firewall rules) before suspecting a config error.
 
-> **Requires OpenSearch operator >= 2.8.0** (the `operator_version` default). 2.8.0 is the
-> first release whose CRD defines `tls.http.customFQDN`, the field the OpenSearch chart uses
-> to carry `psc_dns_name` into the cert ([opensearch-k8s-operator#1147](https://github.com/opensearch-project/opensearch-k8s-operator/pull/1147)).
-> On older operators (e.g. 2.7.0) the Kubernetes API **silently prunes** the field — no error —
-> and the served cert carries only the default cluster DNS names, so hostname TLS will fail.
-> (The ECK-based ES source uses `subjectAltNames` instead, a long-standing ECK field, so it is
-> not subject to this floor.)
+## Contributing
 
-> `psc_service_attachment` is published asynchronously by GKE; it may be empty immediately
-> after apply and populate on a later `terraform refresh`. `cluster.sh info` polls for it.
-
-### VPC Peering (for self-managed clusters in another GCP VPC)
-
-Set the `vpc_peering` block in `terraform.tfvars`. After apply, the migration cluster must create the reciprocal peering targeting the `vpc_network_self_link` Terraform output. CIDRs must not overlap with `10.0.0.0/20` (nodes), `10.4.0.0/14` (pods), or `10.8.0.0/20` (services).
-
-See `terraform.tfvars.example` in each config for full examples.
-
-## How It Works
-
-`cluster.sh` is a thin wrapper around Terraform. Each config under `sources/` or `targets/` has a `terraform/` directory that provisions everything — GKE cluster, VPC, and workloads (via the Helm provider).
-
-- `up` runs `terraform init` + `terraform apply -auto-approve`, then connects to the cluster via `gcloud` and queries kubectl for the LoadBalancer IP and credentials.
-- `down` removes the kubectl context and runs `terraform destroy -auto-approve`.
-- `info` connects and prints the cluster details without modifying anything.
-
-A shared module at `modules/gke-cluster/` provides the common GKE infrastructure (VPC, subnet, cluster, node pool). Each config's `main.tf` calls this module and adds its own Helm releases.
-
-## Adding a New Config
-
-1. Create a new directory under `sources/<platform>/` or `targets/<platform>/` (e.g. `targets/gcp/opensearch-aiven/`)
-2. Add a `terraform/` directory with `main.tf`, `variables.tf`, `versions.tf`, `outputs.tf`, and `terraform.tfvars.example`
-3. Call the shared `modules/gke-cluster` module for GKE-based configs, or write platform-specific infra
-4. Add a `software` output (e.g. `"OpenSearch v2.19.0"`) and a `cluster_password` output if the password is managed by Terraform
-5. Update the `print_info` case statement in `cluster.sh` with the kubectl commands to retrieve the IP and credentials for your config
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to add a new source/target config, repo
+conventions, and local checks. Licensed under [Apache-2.0](LICENSE).

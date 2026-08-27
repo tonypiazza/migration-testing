@@ -84,6 +84,7 @@ usage() {
   echo "Examples:"
   echo "  $0 up sources/gcp/elasticsearch-gke"
   echo "  $0 up targets/gcp/opensearch-gke --private-networking"
+  echo "  $0 up targets/aws/opensearch-managed"
   echo "  $0 info targets/gcp/opensearch-gke"
   echo "  $0 down sources/gcp/elasticsearch-gke"
   echo ""
@@ -124,12 +125,20 @@ CLUSTER_ROLE="$(echo "$CONFIG_PATH" | cut -d/ -f1)"
 PLATFORM="$(echo "$CONFIG_PATH" | cut -d/ -f2)"
 CONFIG_NAME="$(echo "$CONFIG_PATH" | cut -d/ -f3)"
 
+# Managed-service configs have no Kubernetes cluster: connect/disconnect are no-ops and
+# print_info reads everything from Terraform outputs.
+USES_KUBECTL=true
+case "$CONFIG_NAME" in
+  opensearch-managed) USES_KUBECTL=false ;;
+esac
+
 if [[ ! -d "$TF_DIR" ]]; then
   echo "Error: terraform directory not found at ${TF_DIR}"
   exit 1
 fi
 
 disconnect() {
+  [[ "$USES_KUBECTL" == "true" ]] || return 0
   case "$PLATFORM" in
     gcp)
       local cluster_name location project_id context
@@ -152,6 +161,7 @@ disconnect() {
 }
 
 connect() {
+  [[ "$USES_KUBECTL" == "true" ]] || return 0
   local cluster_name location
   cluster_name="$($TF_CMD -chdir="$TF_DIR" output -raw cluster_name)"
   location="$($TF_CMD -chdir="$TF_DIR" output -raw location)"
@@ -284,6 +294,16 @@ print_info() {
         psc_uri="$($TF_CMD -chdir="$TF_DIR" output -raw privatelink_service_name 2>/dev/null)" || true
       fi
       ;;
+    opensearch-managed)
+      # Amazon OpenSearch Service domain: the endpoint is a hostname on port 443 (not 9200).
+      ip="$($TF_CMD -chdir="$TF_DIR" output -raw cluster_endpoint 2>/dev/null) (port 443)" || ip="pending"
+      user="$($TF_CMD -chdir="$TF_DIR" output -raw cluster_user)"
+      password="$($TF_CMD -chdir="$TF_DIR" output -raw cluster_password)"
+      if [[ "$($TF_CMD -chdir="$TF_DIR" output -raw psc_enabled 2>/dev/null)" == "true" ]]; then
+        # The consumer creates an OpenSearch-managed VPC endpoint against this domain ARN.
+        psc_uri="$($TF_CMD -chdir="$TF_DIR" output -raw domain_arn 2>/dev/null)" || true
+      fi
+      ;;
   esac
 
   local software
@@ -310,10 +330,15 @@ validate_private_networking() {
     exit 1
   fi
 
-  local consumer_ids
-  consumer_ids="$(get_tfvars_value "${TF_DIR}/terraform.tfvars" "psc_consumer_project_ids" 2>/dev/null || true)"
+  local consumer_var consumer_ids
+  case "$CONFIG_NAME" in
+    elasticsearch-eks)  consumer_var="privatelink_allowed_principals" ;;
+    opensearch-managed) consumer_var="privatelink_allowed_accounts" ;;
+    *)                  consumer_var="psc_consumer_project_ids" ;;
+  esac
+  consumer_ids="$(get_tfvars_value "${TF_DIR}/terraform.tfvars" "$consumer_var" 2>/dev/null || true)"
   if [[ -z "$consumer_ids" ]]; then
-    echo "Warning: psc_consumer_project_ids is not set in terraform.tfvars."
+    echo "Warning: ${consumer_var} is not set in terraform.tfvars."
     echo "         The service attachment will be created with no authorized consumers."
     echo "         You will need to authorize the migration project separately."
     echo ""
@@ -435,6 +460,10 @@ do_specs() {
     elasticsearch-eks)
       software_label="Elasticsearch"
       software_version="$(get_effective elasticsearch_version)"
+      ;;
+    opensearch-managed)
+      software_label="OpenSearch (Amazon OpenSearch Service)"
+      software_version="$(get_effective opensearch_version)"
       ;;
     *)
       software_label="Unknown"

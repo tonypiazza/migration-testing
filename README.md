@@ -7,7 +7,7 @@ Spin up and tear down Elasticsearch (source) and OpenSearch (target) clusters fo
 - [terraform](https://www.terraform.io/downloads) or [tofu](https://opentofu.org/docs/intro/install)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
 - For **GCP** configs: [gcloud CLI](https://cloud.google.com/sdk/docs/install) with Application Default Credentials configured (`gcloud auth application-default login`)
-- For **AWS** configs: [aws CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) with working credentials (`aws sts get-caller-identity` must succeed). The S3 snapshot bucket (`aiven-sa-demo-es-snapshots` by default) must already exist.
+- For **AWS** configs: [aws CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) with working credentials (`aws sts get-caller-identity` must succeed). For the EKS source, the S3 snapshot bucket (`aiven-sa-demo-es-snapshots` by default) must already exist.
 
 Cloud CLI/credential checks run per-platform only for `up`/`info`/`down`; `specs` works offline.
 
@@ -26,6 +26,7 @@ cp sources/gcp/elasticsearch-gke/terraform/terraform.tfvars.example \
 ./cluster.sh up sources/gcp/elasticsearch-gke
 ./cluster.sh up targets/gcp/opensearch-gke
 ./cluster.sh up sources/aws/elasticsearch-eks   # AWS equivalent of the GCP ES source
+./cluster.sh up targets/aws/opensearch-managed  # Amazon OpenSearch Service (managed) target
 ```
 
 3. Use the printed connection details to configure the migration assistant.
@@ -147,13 +148,72 @@ overlap this cluster's VPC CIDR (`10.0.0.0/16`).
 | the `psc_dns_name` you set   | `source_connectivity.dns_name`             |
 | `vpc_id`                    | peer target for the reciprocal VPC peering (VPC peering only) |
 
+## AWS target (`targets/aws/opensearch-managed`)
+
+A managed [Amazon OpenSearch Service](https://docs.aws.amazon.com/opensearch-service/) domain
+provisioned with [`terraform-aws-modules/opensearch/aws`](https://registry.terraform.io/modules/terraform-aws-modules/opensearch/aws/latest).
+There is no Kubernetes cluster: `cluster.sh` skips the kubectl connect step and reads the
+connection details straight from Terraform outputs. Everything is optional in
+`terraform.tfvars` (a `terraform.tfvars.example` still marks the config for `cluster.sh`).
+
+```bash
+./cluster.sh up   targets/aws/opensearch-managed [--private-networking]
+./cluster.sh info targets/aws/opensearch-managed
+./cluster.sh specs targets/aws/opensearch-managed
+./cluster.sh down targets/aws/opensearch-managed
+```
+
+Defaults: OpenSearch 3.5, 3 × `r6g.large.search` data nodes, single AZ, no dedicated
+masters, 80 GB gp3 per node. Fine-grained access control is on with an internal `admin`
+user whose password Terraform generates (`cluster_password` output). The endpoint is a
+**hostname on port 443** (not 9200); `cluster.sh info` prints it under the `IP:` line.
+`opensearch_version` is `major.minor` only (`"3.5"`, `"2.19"`) because the service does not
+accept patch versions. Domain creation typically takes 15–30 minutes.
+
+By default the domain has a public endpoint and the domain access policy restricts it to
+`allowed_cidrs`. Two opt-in modes make it private; both place the domain inside a
+Terraform-managed VPC (`vpc_cidr`, default `10.0.0.0/16`) with no public endpoint.
+
+### Private Networking (OpenSearch-managed VPC endpoints)
+
+`--private-networking` (`enable_psc=true`) is the analog of GCP PSC / the EKS source's
+PrivateLink: the domain becomes VPC-resident and each account in
+`privatelink_allowed_accounts` is authorized (`aws_opensearch_authorize_vpc_endpoint_access`)
+to create an [OpenSearch-managed VPC endpoint](https://docs.aws.amazon.com/opensearch-service/latest/developerguide/vpc-interface-endpoints.html)
+against it.
+
+1. Add `privatelink_allowed_accounts = ["<migration-account-id>"]` to `terraform.tfvars`.
+2. Run `./cluster.sh up targets/aws/opensearch-managed --private-networking`.
+3. After apply, `cluster.sh` prints a `PSC URI` — here it is the **domain ARN**
+   (`domain_arn` output). The consumer creates an `aws_opensearch_vpc_endpoint` in its own
+   VPC from that ARN and then reaches the domain endpoint hostname through it.
+
+Unlike a raw `aws_vpc_endpoint_service`, there is no service name to hand over and no
+acceptance step — authorization by account ID is the whole handshake.
+
+### VPC Peering (AWS target)
+
+Set the `vpc_peering` block in `terraform.tfvars` (`peer_owner_id`, `peer_vpc_id`,
+`peer_region`, `peer_cidrs`). The domain's security group admits HTTPS from `peer_cidrs`.
+After apply, the migration side must **accept** the peering (`peering_connection_id`
+output) and add reciprocal routes. `peer_cidrs` must not overlap `vpc_cidr`.
+
+### Connecting to the Migration Assistant (AWS target)
+
+| Producer output (this repo) | Consumer variable (opensearch-migrations) |
+|-----------------------------|--------------------------------------------|
+| `domain_arn`                | `target_connectivity.service_attachment` (creates the OpenSearch-managed VPC endpoint) |
+| `cluster_endpoint`          | target hostname (port 443)                 |
+| `vpc_id`                    | peer target for the reciprocal VPC peering (VPC peering only) |
+
 ## How It Works
 
-`cluster.sh` is a thin wrapper around Terraform. Each config under `sources/` or `targets/` has a `terraform/` directory that provisions everything — GKE cluster, VPC, and workloads (via the Helm provider).
+`cluster.sh` is a thin wrapper around Terraform. Each config under `sources/` or `targets/` has a `terraform/` directory that provisions everything — GKE/EKS cluster, VPC, and workloads (via the Helm provider) — or, for managed-service configs like `targets/aws/opensearch-managed`, the service domain itself.
 
 - `up` runs `terraform init` + `terraform apply -auto-approve`, then connects to the cluster (via `gcloud` for GCP or `aws eks update-kubeconfig` for AWS) and queries kubectl for the LoadBalancer address and credentials.
 - `down` removes the kubectl context and runs `terraform destroy -auto-approve`.
 - `info` connects and prints the cluster details without modifying anything.
+- Managed-service configs (no Kubernetes) set `USES_KUBECTL=false` in `cluster.sh`; connect/disconnect are no-ops and `print_info` reads the endpoint and credentials from Terraform outputs.
 
 Shared modules provide the common infrastructure: `modules/gke-cluster/` for GKE (VPC, subnet, cluster, node pool) and `modules/eks-cluster/` for EKS (VPC, cluster, node group, IRSA). Each config's `main.tf` calls the appropriate module and adds its own Helm releases. The `modules/snapshot-repo/` module registers the snapshot repository (GCS or S3) from inside the cluster and is shared across all sources.
 
@@ -161,6 +221,6 @@ Shared modules provide the common infrastructure: `modules/gke-cluster/` for GKE
 
 1. Create a new directory under `sources/<platform>/` or `targets/<platform>/` (e.g. `targets/gcp/opensearch-aiven/`)
 2. Add a `terraform/` directory with `main.tf`, `variables.tf`, `versions.tf`, `outputs.tf`, and `terraform.tfvars.example`
-3. Call the shared `modules/gke-cluster` module for GKE-based configs, or write platform-specific infra
+3. Call the shared `modules/gke-cluster` / `modules/eks-cluster` module for Kubernetes-based configs, or write platform-specific infra (a managed service needs no cluster — add the config name to the `USES_KUBECTL` case in `cluster.sh`)
 4. Add a `software` output (e.g. `"OpenSearch v2.19.0"`) and a `cluster_password` output if the password is managed by Terraform
 5. Update the `print_info` case statement in `cluster.sh` with the kubectl commands to retrieve the IP and credentials for your config

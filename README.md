@@ -7,7 +7,7 @@ Spin up and tear down Elasticsearch (source) and OpenSearch (target) clusters fo
 - [terraform](https://www.terraform.io/downloads) or [tofu](https://opentofu.org/docs/intro/install)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
 - For **GCP** configs: [gcloud CLI](https://cloud.google.com/sdk/docs/install) with Application Default Credentials configured (`gcloud auth application-default login`)
-- For **AWS** configs: [aws CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) with working credentials (`aws sts get-caller-identity` must succeed). For the EKS source, the S3 snapshot bucket (`aiven-sa-demo-es-snapshots` by default) must already exist.
+- For **AWS** configs: [aws CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) with working credentials (`aws sts get-caller-identity` must succeed). For the EKS source, an S3 snapshot bucket is created automatically unless `snapshot_bucket` names an existing one.
 
 Cloud CLI/credential checks run per-platform only for `up`/`info`/`down`; `specs` works offline.
 
@@ -27,6 +27,7 @@ cp sources/gcp/elasticsearch-gke/terraform/terraform.tfvars.example \
 ./cluster.sh up targets/gcp/opensearch-gke
 ./cluster.sh up sources/aws/elasticsearch-eks   # AWS equivalent of the GCP ES source
 ./cluster.sh up targets/aws/opensearch-managed  # Amazon OpenSearch Service (managed) target
+./cluster.sh up targets/aws/opensearch-eks      # AWS equivalent of the GCP OS target
 ```
 
 3. Use the printed connection details to configure the migration assistant.
@@ -109,10 +110,11 @@ operator, with an S3 snapshot repository. It uses the same `cluster.sh` interfac
 ./cluster.sh down sources/aws/elasticsearch-eks
 ```
 
-Prerequisites: `aws` CLI + working credentials, `kubectl`, `tofu`/`terraform`, and the S3
-bucket `aiven-sa-demo-es-snapshots` (override with `snapshot_bucket`) already created.
-Elasticsearch pods reach S3 via IRSA — a least-privilege IAM role scoped to that bucket,
-assumed through the pod service account. The public endpoint is a Network Load Balancer
+Prerequisites: `aws` CLI + working credentials, `kubectl`, and `tofu`/`terraform`. An S3
+snapshot bucket (`<cluster_name>-es-snapshots-<account_id>`) is created automatically and
+removed on `down`; set `snapshot_bucket` in `terraform.tfvars` to use an existing bucket
+instead. Elasticsearch pods reach S3 via IRSA — a least-privilege IAM role scoped to that
+bucket, assumed through the pod service account. The public endpoint is a Network Load Balancer
 provisioned by the AWS Load Balancer Controller; `cluster.sh info` prints its **DNS
 hostname** (AWS LBs expose a hostname, not an IP) under the `IP:` line.
 
@@ -204,6 +206,59 @@ output) and add reciprocal routes. `peer_cidrs` must not overlap `vpc_cidr`.
 |-----------------------------|--------------------------------------------|
 | `domain_arn`                | `target_connectivity.service_attachment` (creates the OpenSearch-managed VPC endpoint) |
 | `cluster_endpoint`          | target hostname (port 443)                 |
+| `vpc_id`                    | peer target for the reciprocal VPC peering (VPC peering only) |
+
+## AWS target (`targets/aws/opensearch-eks`)
+
+The AWS-equivalent of `targets/gcp/opensearch-gke`: OpenSearch on EKS via the OpenSearch
+Kubernetes Operator (with cert-manager for the operator's admission webhook). It uses the
+same `cluster.sh` interface.
+
+```bash
+./cluster.sh up   targets/aws/opensearch-eks [--private-networking]
+./cluster.sh info targets/aws/opensearch-eks
+./cluster.sh specs targets/aws/opensearch-eks
+./cluster.sh down targets/aws/opensearch-eks
+```
+
+Prerequisites: `aws` CLI + working credentials, `kubectl`, `tofu`/`terraform`. Defaults:
+OpenSearch 3.5.0, 5 × `m5.xlarge` nodes, 80 GB gp3 per node. Fine-grained security is on
+with an internal `admin` user whose password Terraform generates (`cluster_password`
+output). The public endpoint is a Network Load Balancer provisioned by the AWS Load
+Balancer Controller; `cluster.sh info` prints its **DNS hostname** (AWS LBs expose a
+hostname, not an IP) under the `IP:` line, serving HTTPS on port 9200.
+
+### Private Networking (AWS PrivateLink, target)
+
+`--private-networking` (`enable_psc=true`) provisions an **internal** NLB plus an
+`aws_vpc_endpoint_service` (AWS PrivateLink) — the same mechanism as the EKS source.
+
+1. Add `privatelink_allowed_principals = ["arn:aws:iam::<account-id>:root"]` to
+   `terraform.tfvars` to authorize the migration account's principal(s).
+2. Optionally set `psc_dns_name` to the hostname the consumer will use; it is added as a
+   Subject Alternative Name on the OpenSearch HTTP cert (the operator's `customFQDN`
+   field, so `operator_version >= 2.8.0` is required), so the consumer validates TLS by
+   hostname.
+3. Run `./cluster.sh up targets/aws/opensearch-eks --private-networking`.
+4. After apply, `cluster.sh` prints a `PSC URI` — this is the `privatelink_service_name`
+   output (a `com.amazonaws.vpce.<region>.vpce-svc-...` string). Supply it to the consumer.
+
+The consumer creates an interface VPC endpoint against that service name; because
+`acceptance_required = false`, connections are auto-accepted.
+
+### VPC Peering (AWS OpenSearch target)
+
+Set the `vpc_peering` block in `terraform.tfvars` (`peer_owner_id`, `peer_vpc_id`,
+`peer_region`, `peer_cidrs`). After apply, the migration side must **accept** the peering
+connection (`peering_connection_id` output) and add reciprocal routes. `peer_cidrs` must
+not overlap this cluster's VPC CIDR (`10.0.0.0/16`).
+
+### Connecting to the Migration Assistant (AWS OpenSearch target)
+
+| Producer output (this repo) | Consumer variable (opensearch-migrations) |
+|-----------------------------|--------------------------------------------|
+| `privatelink_service_name`  | `target_connectivity.service_attachment`   |
+| the `psc_dns_name` you set   | `target_connectivity.dns_name`             |
 | `vpc_id`                    | peer target for the reciprocal VPC peering (VPC peering only) |
 
 ## How It Works

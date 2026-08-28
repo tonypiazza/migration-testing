@@ -85,6 +85,7 @@ usage() {
   echo "  $0 up sources/gcp/elasticsearch-gke"
   echo "  $0 up targets/gcp/opensearch-gke --private-networking"
   echo "  $0 up targets/aws/opensearch-managed"
+  echo "  $0 up targets/aws/opensearch-eks"
   echo "  $0 info targets/gcp/opensearch-gke"
   echo "  $0 down sources/gcp/elasticsearch-gke"
   echo ""
@@ -294,6 +295,14 @@ print_info() {
         psc_uri="$($TF_CMD -chdir="$TF_DIR" output -raw privatelink_service_name 2>/dev/null)" || true
       fi
       ;;
+    opensearch-eks)
+      ip="$(wait_for_lb_hostname os-target-external)" || true
+      user="admin"
+      password="$($TF_CMD -chdir="$TF_DIR" output -raw cluster_password)"
+      if [[ "$($TF_CMD -chdir="$TF_DIR" output -raw psc_enabled 2>/dev/null)" == "true" ]]; then
+        psc_uri="$($TF_CMD -chdir="$TF_DIR" output -raw privatelink_service_name 2>/dev/null)" || true
+      fi
+      ;;
     opensearch-managed)
       # Amazon OpenSearch Service domain: the endpoint is a hostname on port 443 (not 9200).
       ip="$($TF_CMD -chdir="$TF_DIR" output -raw cluster_endpoint 2>/dev/null) (port 443)" || ip="pending"
@@ -332,7 +341,7 @@ validate_private_networking() {
 
   local consumer_var consumer_ids
   case "$CONFIG_NAME" in
-    elasticsearch-eks)  consumer_var="privatelink_allowed_principals" ;;
+    elasticsearch-eks|opensearch-eks) consumer_var="privatelink_allowed_principals" ;;
     opensearch-managed) consumer_var="privatelink_allowed_accounts" ;;
     *)                  consumer_var="psc_consumer_project_ids" ;;
   esac
@@ -460,6 +469,10 @@ do_specs() {
     elasticsearch-eks)
       software_label="Elasticsearch"
       software_version="$(get_effective elasticsearch_version)"
+      ;;
+    opensearch-eks)
+      software_label="OpenSearch"
+      software_version="$(get_effective opensearch_version)"
       ;;
     opensearch-managed)
       software_label="OpenSearch (Amazon OpenSearch Service)"

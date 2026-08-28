@@ -1,0 +1,32 @@
+# Optional overrides:
+# name_prefix              = "os-tony"
+# opensearch_version       = "3.5.0"
+# region                   = "us-east-2"
+# kubernetes_version       = "1.33"
+# instance_type            = "m5.xlarge"
+# node_count               = 5
+# disk_size_gb             = 80
+# operator_version         = "2.8.4"
+# cert_manager_version     = "v1.19.6"
+# allowed_cidrs            = ["203.0.113.0/24"]
+
+# PrivateLink (private networking, enabled via cluster.sh --private-networking):
+# Exposes OpenSearch via an internal NLB + VPC endpoint service instead of a public NLB.
+# After apply, use the privatelink_service_name output printed by cluster.sh as the
+# migration console's target_connectivity.service_attachment input.
+# enable_psc                     = true
+# privatelink_allowed_principals = ["arn:aws:iam::123456789012:root"]
+# psc_dns_name                   = "os.internal.example.com"
+
+# VPC Peering:
+# Peers this VPC with the migration cluster's VPC so OpenSearch is reachable over
+# internal IPs. After apply, the migration side must accept the peering
+# (peering_connection_id output) and add reciprocal routes. peer_cidrs must not overlap
+# with this cluster's VPC CIDR (10.0.0.0/16).
+# vpc_peering = {
+#   mode          = "enabled"
+#   peer_owner_id = "123456789012"
+#   peer_vpc_id   = "vpc-0abc123"
+#   peer_region   = "us-east-2"
+#   peer_cidrs    = ["10.20.0.0/16"]
+# }

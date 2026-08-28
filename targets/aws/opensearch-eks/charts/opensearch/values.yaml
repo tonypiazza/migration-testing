@@ -1,0 +1,33 @@
+clusterName: os-target
+version: "3.6.0"
+adminPassword: "changeme"
+adminPasswordHash: "$2a$10$placeholder"
+
+nodePools:
+  - component: nodes
+    replicas: 5
+    roles:
+      - cluster_manager
+      - data
+      - ingest
+    jvm: "-Xms4g -Xmx4g"
+    resources:
+      requests:
+        memory: 8Gi
+        cpu: 2
+      limits:
+        memory: 8Gi
+        cpu: 4
+    diskSize: 50Gi
+
+http:
+  # When true, the NLB is provisioned internal (for PrivateLink) instead of internet-facing.
+  internal: false
+  allowedCIDRs:
+    - "0.0.0.0/0"
+  # Tag applied to the NLB so Terraform can discover it (data "aws_lb") to wire PrivateLink.
+  # Set by Terraform to "os-privatelink=<cluster_name>".
+  nlbTag: ""
+  # Optional hostname added as a SAN (customFQDN) on the OpenSearch HTTP cert
+  # (PrivateLink-by-hostname parity).
+  dnsName: ""

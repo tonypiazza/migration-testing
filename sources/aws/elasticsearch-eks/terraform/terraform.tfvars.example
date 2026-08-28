@@ -9,8 +9,10 @@
 # eck_version              = "2.14.0"
 # allowed_cidrs            = ["203.0.113.0/24"]
 
-# The S3 snapshot bucket must already exist:
-# snapshot_bucket    = "aiven-sa-demo-es-snapshots"
+# Snapshots: leave snapshot_bucket unset to create a bucket automatically
+# (<cluster_name>-es-snapshots-<account_id>, deleted on destroy). Set it to use an
+# existing bucket instead.
+# snapshot_bucket    = "my-existing-es-snapshots"
 # snapshot_base_path = "snapshots/optimized"
 
 # PrivateLink (private networking, enabled via cluster.sh --private-networking):

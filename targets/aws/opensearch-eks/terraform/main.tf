@@ -105,7 +105,10 @@ resource "helm_release" "lb_controller" {
     value = "aws-load-balancer-controller"
   }
 
-  depends_on = [kubernetes_service_account.lb_controller]
+  # The module dependency keeps the IRSA policy attachment alive during destroy: without
+  # it Terraform detaches the controller's IAM policy immediately (nothing references it),
+  # leaving the controller unable to delete the NLB, so the Service finalizer never clears.
+  depends_on = [kubernetes_service_account.lb_controller, module.lb_controller_irsa]
 }
 
 # ---------------------------------------------------------------------------

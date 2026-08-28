@@ -89,9 +89,9 @@ variable "vpc_peering" {
 }
 
 variable "snapshot_bucket" {
-  description = "S3 bucket for Elasticsearch snapshots (must already exist)"
+  description = "Existing S3 bucket for Elasticsearch snapshots. Leave empty to have this template create one (named <cluster_name>-es-snapshots-<account_id>) and destroy it with the cluster."
   type        = string
-  default     = "aiven-sa-demo-es-snapshots"
+  default     = ""
 }
 
 variable "snapshot_base_path" {

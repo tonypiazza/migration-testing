@@ -48,6 +48,31 @@ module "eks" {
   enable_cluster_creator_admin_permissions = true
   endpoint_public_access                   = true
 
+  # eks module v21 sets bootstrap_self_managed_addons = false, so EKS no longer installs the
+  # default addons on its own. Without vpc-cni nodes never become Ready and the managed node
+  # group hangs in CREATING. vpc-cni/kube-proxy must exist before the node group is created.
+  addons = {
+    vpc-cni = {
+      before_compute = true
+    }
+    kube-proxy = {
+      before_compute = true
+    }
+    eks-pod-identity-agent = {
+      before_compute = true
+    }
+    coredns = {}
+    # PersistentVolumes need the EBS CSI driver (even the built-in gp2 class is CSI-migrated).
+    # Uses Pod Identity rather than IRSA: an IRSA role needs the OIDC provider this module
+    # creates, which would be a dependency cycle.
+    aws-ebs-csi-driver = {
+      pod_identity_association = [{
+        role_arn        = aws_iam_role.ebs_csi.arn
+        service_account = "ebs-csi-controller-sa"
+      }]
+    }
+  }
+
   eks_managed_node_groups = {
     default = {
       instance_types = [var.instance_type]
@@ -57,4 +82,28 @@ module "eks" {
       disk_size      = var.disk_size_gb
     }
   }
+}
+
+# ---------------------------------------------------------------------------
+# EBS CSI driver role (EKS Pod Identity)
+# ---------------------------------------------------------------------------
+data "aws_iam_policy_document" "ebs_csi_trust" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole", "sts:TagSession"]
+    principals {
+      type        = "Service"
+      identifiers = ["pods.eks.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "ebs_csi" {
+  name_prefix        = "${var.cluster_name}-ebs-csi-"
+  assume_role_policy = data.aws_iam_policy_document.ebs_csi_trust.json
+}
+
+resource "aws_iam_role_policy_attachment" "ebs_csi" {
+  role       = aws_iam_role.ebs_csi.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
 }

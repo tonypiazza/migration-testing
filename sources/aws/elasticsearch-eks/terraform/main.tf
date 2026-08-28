@@ -108,6 +108,41 @@ resource "helm_release" "lb_controller" {
 }
 
 # ---------------------------------------------------------------------------
+# Snapshot bucket — use the caller-supplied bucket, or create one when none is given.
+# ---------------------------------------------------------------------------
+data "aws_caller_identity" "current" {}
+
+locals {
+  create_snapshot_bucket = var.snapshot_bucket == ""
+  # Bucket names are global and must be lowercase; the account ID keeps the generated name unique.
+  generated_snapshot_bucket = lower("${local.cluster_name}-es-snapshots-${data.aws_caller_identity.current.account_id}")
+  snapshot_bucket           = local.create_snapshot_bucket ? aws_s3_bucket.snapshots[0].bucket : var.snapshot_bucket
+}
+
+resource "aws_s3_bucket" "snapshots" {
+  count = local.create_snapshot_bucket ? 1 : 0
+
+  bucket = local.generated_snapshot_bucket
+  # Test/demo environment: let `destroy` remove the bucket even if it holds snapshots.
+  force_destroy = true
+
+  tags = {
+    Name    = local.generated_snapshot_bucket
+    Cluster = local.cluster_name
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "snapshots" {
+  count = local.create_snapshot_bucket ? 1 : 0
+
+  bucket                  = aws_s3_bucket.snapshots[0].id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# ---------------------------------------------------------------------------
 # IRSA — Elasticsearch S3 snapshots
 # ---------------------------------------------------------------------------
 data "aws_iam_policy_document" "es_snapshots" {
@@ -119,7 +154,7 @@ data "aws_iam_policy_document" "es_snapshots" {
       "s3:ListBucketMultipartUploads",
       "s3:ListBucketVersions",
     ]
-    resources = ["arn:aws:s3:::${var.snapshot_bucket}"]
+    resources = ["arn:aws:s3:::${local.snapshot_bucket}"]
   }
 
   statement {
@@ -131,7 +166,7 @@ data "aws_iam_policy_document" "es_snapshots" {
       "s3:AbortMultipartUpload",
       "s3:ListMultipartUploadParts",
     ]
-    resources = ["arn:aws:s3:::${var.snapshot_bucket}/*"]
+    resources = ["arn:aws:s3:::${local.snapshot_bucket}/*"]
   }
 }
 
@@ -159,6 +194,31 @@ module "es_snapshots_irsa" {
 }
 
 # ---------------------------------------------------------------------------
+# Default StorageClass — EKS ships gp2 but does not mark it default, so PVCs with no
+# storageClassName (ECK's volumeClaimTemplates) never bind. Backed by the EBS CSI addon.
+# ---------------------------------------------------------------------------
+resource "kubernetes_storage_class_v1" "gp3" {
+  metadata {
+    name = "gp3"
+    annotations = {
+      "storageclass.kubernetes.io/is-default-class" = "true"
+    }
+  }
+
+  storage_provisioner    = "ebs.csi.aws.com"
+  reclaim_policy         = "Delete"
+  volume_binding_mode    = "WaitForFirstConsumer"
+  allow_volume_expansion = true
+
+  parameters = {
+    type   = "gp3"
+    fsType = "ext4"
+  }
+
+  depends_on = [module.cluster]
+}
+
+# ---------------------------------------------------------------------------
 # ECK operator + Elasticsearch
 # ---------------------------------------------------------------------------
 resource "helm_release" "eck_operator" {
@@ -169,7 +229,10 @@ resource "helm_release" "eck_operator" {
   namespace        = "elastic-system"
   create_namespace = true
 
-  depends_on = [module.cluster]
+  # The LB controller chart registers a mutating webhook for every Service in the cluster;
+  # creating the operator's webhook Service before the controller pods are ready fails with
+  # "no endpoints available for service aws-load-balancer-webhook-service".
+  depends_on = [module.cluster, helm_release.lb_controller]
 }
 
 resource "helm_release" "elasticsearch" {
@@ -213,7 +276,7 @@ resource "helm_release" "elasticsearch" {
     value = var.psc_dns_name
   }
 
-  depends_on = [helm_release.eck_operator, helm_release.lb_controller]
+  depends_on = [helm_release.eck_operator, helm_release.lb_controller, kubernetes_storage_class_v1.gp3]
 }
 
 # ---------------------------------------------------------------------------
@@ -298,7 +361,7 @@ module "snapshot_repo" {
   password_key       = "elastic"
   repo_type          = "s3"
   repo_settings = {
-    bucket    = var.snapshot_bucket
+    bucket    = local.snapshot_bucket
     base_path = var.snapshot_base_path
   }
 

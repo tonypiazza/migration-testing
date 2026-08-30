@@ -164,6 +164,10 @@ resource "helm_release" "opensearch" {
     value = var.connection_limit
   }
 
+  # Uninstall waits on the operator to clear its finalizers on the OpenSearchCluster CR,
+  # which can outlast helm's 300s default and fail with "context deadline exceeded".
+  timeout = 900
+
   lifecycle {
     ignore_changes = [set]
   }

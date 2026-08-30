@@ -105,6 +105,10 @@ resource "helm_release" "elasticsearch" {
     value = var.connection_limit
   }
 
+  # Uninstall waits on ECK to clear its finalizers on the Elasticsearch CR, which can
+  # outlast helm's 300s default and fail with "context deadline exceeded".
+  timeout = 900
+
   depends_on = [helm_release.eck_operator]
 }
 

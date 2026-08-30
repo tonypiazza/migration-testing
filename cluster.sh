@@ -422,6 +422,124 @@ do_up() {
   print_info
 }
 
+# PVC name prefixes our charts produce. The StatefulSet volumeClaimTemplate name and the
+# chart's clusterName are both hardcoded (os-target / es-source), so these prefixes identify
+# a disk as ours regardless of name_prefix, which is user-configurable.
+OUR_PVC_PREFIXES=(
+  "data-os-target-"                    # targets/gcp/opensearch-gke
+  "elasticsearch-data-es-source-es-"   # sources/*/elasticsearch-*
+)
+
+# Deleting a GKE/EKS cluster bypasses the StorageClass 'Delete' reclaim policy, so the
+# PersistentVolume disks survive and keep billing.
+#
+# Two passes are needed, because neither identifier alone is sufficient:
+#
+#   1. By cluster label. GKE stamps goog-k8s-cluster-name on each PD, which catches every
+#      disk the cluster owned including ones from charts we don't ship (Prometheus etc).
+#   2. By PVC name in the disk description. Some disks carry NO cluster label at all, so
+#      pass 1 misses them entirely -- a real leak that went unnoticed for weeks. The CSI
+#      driver always records created-for/pvc/name, and our chart PVC prefixes are fixed,
+#      so this identifies our disks without relying on the label.
+#
+# Pass 2 is deliberately restricted to unlabeled disks: a labeled disk belongs to a specific
+# cluster, and deleting one whose cluster is still alive would destroy live data. Unlabeled
+# disks have no cluster to check, so the PVC prefix is the only provenance available -- and
+# it is decisive, since only our charts create those names.
+cleanup_orphaned_disks() {
+  local cluster_name="$1" location="$2" project_id="$3"
+
+  [[ "$PLATFORM" == "gcp" ]] || return 0
+  if [[ -z "$project_id" ]]; then
+    echo ""
+    echo "Warning: could not determine the project; skipping orphaned-disk cleanup."
+    echo "         Check for leftover 'pvc-*' disks: gcloud compute disks list --filter=\"-users:*\""
+    return 0
+  fi
+
+  local disks="" unlabeled=""
+
+  # Pass 1 needs a cluster name, and that cluster must already be gone -- otherwise its
+  # disks may still be legitimately in use. Pass 2 needs neither, so a missing cluster name
+  # is not fatal here.
+  if [[ -n "$cluster_name" ]] && ! gcloud container clusters describe "$cluster_name" \
+       --location "$location" --project "$project_id" >/dev/null 2>&1; then
+    disks="$(gcloud compute disks list \
+      --filter="labels.goog-k8s-cluster-name=${cluster_name} AND -users:*" \
+      --format="value(name,zone.basename())" --project="$project_id" 2>/dev/null)"
+  elif [[ -z "$cluster_name" ]]; then
+    echo ""
+    echo "Warning: could not determine the cluster name; checking unlabeled disks only."
+  fi
+
+  # Pass 2: unattached AND unlabeled AND created for one of our chart PVCs. The description
+  # is JSON, so match on the quoted key/value pair rather than the bare prefix -- a substring
+  # match on the prefix alone could hit another field.
+  local prefix
+  for prefix in "${OUR_PVC_PREFIXES[@]}"; do
+    unlabeled="$(gcloud compute disks list \
+      --filter="-users:* AND -labels.goog-k8s-cluster-name:* AND description ~ \"created-for/pvc/name\\\":\\\"${prefix}\"" \
+      --format="value(name,zone.basename())" --project="$project_id" 2>/dev/null)"
+    # NOTE: plain concatenation with a real newline -- $'\n' is NOT expanded inside
+    # ${var:+...}, which would splice in a literal '$\n' and corrupt the zone field.
+    [[ -n "$unlabeled" ]] && disks="${disks}
+${unlabeled}"
+  done
+
+  # Both passes can return the same disk only if it were labeled and unlabeled at once, which
+  # is impossible -- but dedupe anyway so a second delete cannot report a spurious failure.
+  disks="$(printf '%s\n' "$disks" | grep -v '^[[:space:]]*$' | sort -u || true)"
+  [[ -z "$disks" ]] && return 0
+
+  echo ""
+  echo "Deleting orphaned persistent disks..."
+  local name zone
+  while read -r name zone; do
+    [[ -z "$name" || -z "$zone" ]] && continue
+    if gcloud compute disks delete "$name" --zone "$zone" --project="$project_id" --quiet 2>/dev/null; then
+      echo "  deleted ${name} (${zone})"
+    else
+      echo "  WARNING: failed to delete ${name} (${zone}) -- delete it manually"
+    fi
+  done <<< "$disks"
+}
+
+# Returns 0 if any stale helm_release entries were dropped (so the caller should retry the
+# destroy), 1 if there was nothing to do.
+drop_orphaned_helm_releases() {
+  local cluster_name="$1" location="$2" project_id="$3"
+
+  local releases
+  releases="$($TF_CMD -chdir="$TF_DIR" state list 2>/dev/null | grep '^helm_release\.' || true)"
+  [[ -z "$releases" ]] && return 1
+
+  # Only safe once the cluster is actually gone. While it still exists a refresh failure is
+  # a real error worth surfacing, not a stale-state artifact.
+  case "$PLATFORM" in
+    gcp)
+      [[ -n "$cluster_name" && -n "$project_id" ]] || return 1
+      gcloud container clusters describe "$cluster_name" --location "$location" \
+        --project "$project_id" >/dev/null 2>&1 && return 1
+      ;;
+    aws)
+      [[ -n "$cluster_name" ]] || return 1
+      aws eks describe-cluster --name "$cluster_name" --region "$location" \
+        >/dev/null 2>&1 && return 1
+      ;;
+    *) return 1 ;;
+  esac
+
+  echo ""
+  echo "Cluster ${cluster_name} is gone but helm releases remain in state."
+  echo "Dropping the stale entries (the releases died with the cluster)..."
+  local r
+  while read -r r; do
+    [[ -z "$r" ]] && continue
+    $TF_CMD -chdir="$TF_DIR" state rm "$r" >/dev/null 2>&1 && echo "  removed ${r}"
+  done <<< "$releases"
+  return 0
+}
+
 do_down() {
   check_cloud_prerequisites
   # disconnect() and the post-failure firewall cleanup both shell out to gcloud.
@@ -432,13 +550,37 @@ do_down() {
     exit 0
   fi
 
+  # Read identifying details BEFORE destroy: a successful destroy empties the state, and
+  # the PD cleanup below still needs to know which cluster's disks to look for.
+  local doomed_cluster doomed_location doomed_project
+  doomed_cluster="$($TF_CMD -chdir="$TF_DIR" output -raw cluster_name 2>/dev/null)" || doomed_cluster=""
+  doomed_location="$($TF_CMD -chdir="$TF_DIR" output -raw location 2>/dev/null)" || doomed_location=""
+  if [[ "$PLATFORM" == "gcp" ]]; then
+    doomed_project="$($TF_CMD -chdir="$TF_DIR" output -raw project_id 2>/dev/null)" || doomed_project=""
+  fi
+
   disconnect
 
   echo "Destroying cluster..."
   if $TF_CMD -chdir="$TF_DIR" destroy -auto-approve ${TF_VARS[@]+"${TF_VARS[@]}"}; then
+    cleanup_orphaned_disks "$doomed_cluster" "$doomed_location" "$doomed_project"
     echo ""
     echo "Cluster destroyed."
     return 0
+  fi
+
+  # A helm_release cannot be refreshed once its cluster is gone ("Kubernetes cluster
+  # unreachable"), which blocks the rest of the destroy. The release died with the cluster,
+  # so dropping the stale state entries is safe -- but only once the cluster really is gone.
+  if drop_orphaned_helm_releases "$doomed_cluster" "$doomed_location" "$doomed_project"; then
+    echo ""
+    echo "Retrying destroy..."
+    if $TF_CMD -chdir="$TF_DIR" destroy -auto-approve ${TF_VARS[@]+"${TF_VARS[@]}"}; then
+      cleanup_orphaned_disks "$doomed_cluster" "$doomed_location" "$doomed_project"
+      echo ""
+      echo "Cluster destroyed."
+      return 0
+    fi
   fi
 
   # The VPC delete fails while firewall rules still reference it. Terraform does not manage
@@ -481,6 +623,8 @@ do_down() {
   echo ""
   echo "Retrying destroy..."
   $TF_CMD -chdir="$TF_DIR" destroy -auto-approve ${TF_VARS[@]+"${TF_VARS[@]}"}
+
+  cleanup_orphaned_disks "$doomed_cluster" "$doomed_location" "$doomed_project"
 
   echo ""
   echo "Cluster destroyed."

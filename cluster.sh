@@ -60,6 +60,25 @@ check_cloud_prerequisites() {
   return 0
 }
 
+# Terraform reaches both the GKE and Kubernetes APIs via Application Default Credentials,
+# but 'gcloud container clusters get-credentials' and 'gcloud compute' use the separate
+# gcloud user credential store. ADC can be valid while the user session has expired, so
+# the callers that shell out to gcloud must check for themselves.
+check_gcloud_user_auth() {
+  local err
+  if ! err="$(gcloud auth print-access-token 2>&1 >/dev/null)"; then
+    echo "Error: gcloud could not obtain a user access token."
+    if [[ "$err" == *"non-interactive"* || "$err" == *Reauth* ]]; then
+      echo "Google is requiring re-verification of your session, which needs a terminal"
+      echo "to prompt (2FA / security key). Run 'gcloud auth login' interactively, then retry."
+    else
+      echo "Run: gcloud auth login"
+    fi
+    echo "(Application Default Credentials are separate and may still be valid.)"
+    exit 1
+  fi
+}
+
 check_prerequisites
 
 TF_VARS=()
@@ -138,6 +157,20 @@ if [[ ! -d "$TF_DIR" ]]; then
   exit 1
 fi
 
+has_outputs() {
+  local json
+  json="$($TF_CMD -chdir="$TF_DIR" output -json 2>/dev/null)" || return 1
+  [[ -n "$json" && "$json" != "{}" ]]
+}
+
+# 'down' must gate on tracked resources, not outputs: a partially-failed destroy leaves
+# resources in state while the outputs that depended on them are already gone.
+has_state_resources() {
+  local n
+  n="$($TF_CMD -chdir="$TF_DIR" state list 2>/dev/null | wc -l | tr -d ' ')"
+  [[ "$n" -gt 0 ]]
+}
+
 disconnect() {
   [[ "$USES_KUBECTL" == "true" ]] || return 0
   case "$PLATFORM" in
@@ -170,6 +203,7 @@ connect() {
   case "$PLATFORM" in
     gcp)
       local project_id
+      check_gcloud_user_auth
       project_id="$($TF_CMD -chdir="$TF_DIR" output -raw project_id)"
       gcloud container clusters get-credentials "$cluster_name" \
         --location "$location" --project "$project_id" --quiet
@@ -253,16 +287,30 @@ wait_for_psc_uri() {
 }
 
 print_info() {
-  if ! $TF_CMD -chdir="$TF_DIR" output -raw cluster_name >/dev/null 2>&1; then
+  # 'output -raw <name>' on a state with no outputs exits 0 and prints a warning banner to
+  # stdout, so its exit code cannot be used to detect missing state. '-json' is reliable:
+  # it emits '{}' when there are no outputs.
+  if ! has_outputs; then
     echo ""
     echo "Cluster not found. No terraform state exists for this config."
     exit 1
   fi
 
-  if ! connect 2>/dev/null; then
-    echo ""
-    echo "Cluster not found. It may have been torn down."
-    exit 1
+  # Only opensearch-gke can report without a cluster connection (see below); every other
+  # config reads the password out of an operator-generated secret via kubectl.
+  if [[ "$CONFIG_NAME" != "opensearch-gke" ]]; then
+    local connect_err
+    connect_err="$(connect 2>&1 >/dev/null)" || {
+      echo ""
+      # GKE says 'Not found'/'NotFound'; EKS says 'ResourceNotFoundException'/'No cluster named'.
+      if [[ "$connect_err" == *NotFound* || "$connect_err" == *"Not found"* || "$connect_err" == *"No cluster named"* ]]; then
+        echo "Cluster not found. It may have been torn down."
+      else
+        echo "Error: could not connect to the cluster."
+        echo "$connect_err"
+      fi
+      exit 1
+    }
   fi
 
   local ip user password
@@ -279,11 +327,14 @@ print_info() {
       fi
       ;;
     opensearch-gke)
-      ip="$(wait_for_lb_ip os-target-external)" || true
+      # Both values are already in terraform state (cluster_ip comes from the
+      # kubernetes_service data source during apply), so no kubectl context is needed.
+      ip="$($TF_CMD -chdir="$TF_DIR" output -raw cluster_ip 2>/dev/null)" || ip="pending"
+      [[ -z "$ip" ]] && ip="pending"
       user="admin"
       password="$($TF_CMD -chdir="$TF_DIR" output -raw cluster_password)"
       if [[ "$($TF_CMD -chdir="$TF_DIR" output -raw psc_enabled 2>/dev/null)" == "true" ]]; then
-        psc_uri="$(wait_for_psc_uri os-target-psc)" || true
+        psc_uri="$($TF_CMD -chdir="$TF_DIR" output -raw psc_service_attachment 2>/dev/null)" || true
       fi
       ;;
     elasticsearch-eks)
@@ -373,7 +424,9 @@ do_up() {
 
 do_down() {
   check_cloud_prerequisites
-  if ! $TF_CMD -chdir="$TF_DIR" output -raw cluster_name >/dev/null 2>&1; then
+  # disconnect() and the post-failure firewall cleanup both shell out to gcloud.
+  [[ "$PLATFORM" == "gcp" ]] && check_gcloud_user_auth
+  if ! has_state_resources; then
     echo ""
     echo "Nothing to destroy. No terraform state exists for this config."
     exit 0
@@ -381,17 +434,52 @@ do_down() {
 
   disconnect
 
-  local network project_id
-  network="$($TF_CMD -chdir="$TF_DIR" state show 'module.cluster.google_compute_network.main' 2>/dev/null | awk -F'"' '/^\s*name\s*=/{print $2}')"
-  project_id="$($TF_CMD -chdir="$TF_DIR" state show 'module.cluster.google_compute_network.main' 2>/dev/null | awk -F'"' '/^\s*project\s*=/{print $2}')"
-
-  if [[ -n "$network" && -n "$project_id" ]]; then
-    echo "Cleaning up GKE-managed firewall rules for network ${network}..."
-    gcloud compute firewall-rules list --filter="network=${network}" --format="value(name)" --project="$project_id" | \
-      xargs -n1 gcloud compute firewall-rules delete --quiet --project="$project_id" || true
+  echo "Destroying cluster..."
+  if $TF_CMD -chdir="$TF_DIR" destroy -auto-approve ${TF_VARS[@]+"${TF_VARS[@]}"}; then
+    echo ""
+    echo "Cluster destroyed."
+    return 0
   fi
 
-  echo "Destroying cluster..."
+  # The VPC delete fails while firewall rules still reference it. Terraform does not manage
+  # those rules (GKE creates them for the cluster and for LoadBalancer services; other
+  # tooling may add its own), so clean them up and retry.
+  #
+  # This runs ONLY after a failed destroy, never before. Deleting the rules up front breaks
+  # control-plane -> node connectivity (kubelet 10250, webhook 9443), which wedges operator
+  # finalizers and makes 'helm uninstall' fail with 'context deadline exceeded'. By this
+  # point the k8s workloads are already gone, so removing the rules is safe.
+  if [[ "$PLATFORM" != "gcp" ]]; then
+    return 1
+  fi
+
+  # NOTE: patterns use [[:space:]], not \s -- BSD awk on macOS does not support \s.
+  local net_state network project_id
+  net_state="$($TF_CMD -chdir="$TF_DIR" state show 'module.cluster.google_compute_network.main' 2>/dev/null)" || net_state=""
+  network="$(printf '%s\n' "$net_state" | awk -F'"' '/^[[:space:]]*name[[:space:]]*=/{print $2; exit}')"
+  project_id="$(printf '%s\n' "$net_state" | awk -F'"' '/^[[:space:]]*project[[:space:]]*=/{print $2; exit}')"
+
+  if [[ -z "$network" || -z "$project_id" ]]; then
+    echo ""
+    echo "Error: destroy failed and the VPC name/project could not be read from state."
+    echo "       Inspect the error above and clean up manually."
+    exit 1
+  fi
+
+  echo ""
+  echo "Destroy failed. Cleaning up firewall rules on ${network} and retrying..."
+  local rules
+  rules="$(gcloud compute firewall-rules list --filter="network=${network}" \
+    --format="value(name)" --project="$project_id" 2>/dev/null)"
+  if [[ -n "$rules" ]]; then
+    printf '%s\n' "$rules" | \
+      xargs -n1 gcloud compute firewall-rules delete --quiet --project="$project_id" || true
+  else
+    echo "  (no firewall rules found -- the failure was something else)"
+  fi
+
+  echo ""
+  echo "Retrying destroy..."
   $TF_CMD -chdir="$TF_DIR" destroy -auto-approve ${TF_VARS[@]+"${TF_VARS[@]}"}
 
   echo ""
